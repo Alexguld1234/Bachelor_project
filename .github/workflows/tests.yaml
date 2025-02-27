@@ -2,9 +2,13 @@ name: Unit Tests
 
 on:
   push:
+    paths:
+      - 'dockerfiles/**' 
     branches:
       - main
   pull_request:
+    paths:
+      - 'dockerfiles/**' 
     branches:
       - main
 

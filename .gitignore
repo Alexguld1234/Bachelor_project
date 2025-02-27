@@ -25,7 +25,9 @@ __pycache__/
 
 # files
 
-data/
+data/DICOM/*
+data/JPG/*
+data/OWN_JPG/*
 
 
 # Distribution / packaging
