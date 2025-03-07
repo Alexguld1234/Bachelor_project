@@ -2,7 +2,10 @@ from pathlib import Path
 
 import typer
 from torch.utils.data import Dataset
+import pandas as pd
 
+class DICOMDataLoader:
+    PATH=Path("DICOM")
 
 class MyDataset(Dataset):
     """My custom dataset."""
