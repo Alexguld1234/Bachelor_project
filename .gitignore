@@ -25,14 +25,10 @@ __pycache__/
 
 # files
 
-data/DICOM/*
-data/JPG/*
-data/OWN_JPG/*
-data/JPG_AP/*
-data/DICOM_AP/*
-data/Reports/*
 data/*
 notebooks/create_dataset.ipynb
+Own_files/*
+notebooks/*
 
 # Distribution / packaging
 .Python
