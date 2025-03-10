@@ -31,6 +31,8 @@ data/OWN_JPG/*
 data/JPG_AP/*
 data/DICOM_AP/*
 data/Reports/*
+data/*
+notebooks/create_dataset.ipynb
 
 # Distribution / packaging
 .Python
