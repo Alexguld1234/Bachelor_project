@@ -1,79 +1,47 @@
 import torch
 import matplotlib.pyplot as plt
-import seaborn as sns
-import numpy as np
-from sklearn.metrics import roc_curve, auc, precision_recall_curve
-from model import ChestXrayReportGenerator
+from torchvision.utils import make_grid
 from data import get_dataloader
-from pathlib import Path
-from PIL import Image
-import logging
+from model import RadTexModel
+from transformers import GPT2Tokenizer
 
-# Setup logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+VOCAB_SIZE = 30522
 
-# Load best model
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-VOCAB_SIZE = 5000
-model = ChestXrayReportGenerator(VOCAB_SIZE).to(device)
-model.load_state_dict(torch.load("models/best_model.pth"))
+# ✅ Load Model
+model = RadTexModel(vocab_size=VOCAB_SIZE).to(DEVICE)
+model.load_state_dict(torch.load("radtex_model.pth", map_location=DEVICE, weights_only=True))
 model.eval()
 
-# Load test data
-test_loader = get_dataloader("data/subset_pneumonia_30.csv", "data/JPG_AP", "data/Reports", mode="test", batch_size=1)
+# ✅ Load Test Data
+test_loader = get_dataloader(mode="test", batch_size=8, shuffle=False)
+tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
 
-def plot_sample_predictions(num_samples=5):
-    model.eval()
-    fig, axes = plt.subplots(num_samples, 2, figsize=(10, num_samples * 4))
+def show_predictions():
+    """
+    Display images with classification predictions and generated text.
+    """
+    images, reports, labels = next(iter(test_loader))
+    images, labels = images.to(DEVICE), labels.to(DEVICE).float().unsqueeze(1)
 
-    with torch.no_grad():
-        for i, (image, report, label) in enumerate(test_loader):
-            if i >= num_samples:
-                break
-            image = image.to(device)
-            label = label.item()
-            
-            # Forward pass
-            class_pred, _ = model(image, torch.randint(0, VOCAB_SIZE, (1, 20)).to(device))
-            predicted_label = "Pneumonia" if class_pred.item() > 0.5 else "No Pneumonia"
-            
-            # Load original image
-            img = np.array(image.cpu().squeeze(0).permute(1, 2, 0))
+    text_inputs = torch.randint(0, VOCAB_SIZE, (images.shape[0], 30)).to(DEVICE)
+    class_output, text_output = model(images, text_inputs)
 
-            # Plot image and report
-            axes[i, 0].imshow(img)
-            axes[i, 0].axis("off")
-            axes[i, 0].set_title(f"Actual: {'Pneumonia' if label else 'No Pneumonia'}\nPredicted: {predicted_label}")
+    predicted_labels = (class_output > 0.5).float().cpu().numpy()
+    generated_ids = text_output.argmax(dim=-1).cpu().tolist()
+    generated_texts = [tokenizer.decode(g, skip_special_tokens=True) for g in generated_ids]
 
-            axes[i, 1].text(0.1, 0.5, f"Generated Report:\n{report}", fontsize=12, wrap=True)
-            axes[i, 1].axis("off")
+    fig, axes = plt.subplots(2, 4, figsize=(15, 8))
+    for i, ax in enumerate(axes.flat):
+        if i >= len(images): break
+        ax.imshow(images[i].cpu().squeeze(), cmap="gray")
+        ax.set_title(f"Pred: {int(predicted_labels[i].item())}, True: {int(labels[i].item())}")
+        ax.set_xlabel(f"Generated: {generated_texts[i][:50]}...\nActual: {reports[i][:50]}...")
+        ax.set_xticks([])
+        ax.set_yticks([])
 
     plt.tight_layout()
     plt.show()
 
-def plot_roc_curve(labels, predictions):
-    fpr, tpr, _ = roc_curve(labels, predictions)
-    roc_auc = auc(fpr, tpr)
-
-    plt.figure(figsize=(8, 6))
-    plt.plot(fpr, tpr, color="blue", lw=2, label=f"ROC curve (area = {roc_auc:.4f})")
-    plt.plot([0, 1], [0, 1], color="gray", linestyle="--")
-    plt.xlabel("False Positive Rate")
-    plt.ylabel("True Positive Rate")
-    plt.title("Receiver Operating Characteristic (ROC) Curve")
-    plt.legend(loc="lower right")
-    plt.show()
-
-def plot_precision_recall_curve(labels, predictions):
-    precision, recall, _ = precision_recall_curve(labels, predictions)
-    
-    plt.figure(figsize=(8, 6))
-    plt.plot(recall, precision, color="red", lw=2, label="Precision-Recall Curve")
-    plt.xlabel("Recall")
-    plt.ylabel("Precision")
-    plt.title("Precision-Recall Curve")
-    plt.legend(loc="upper right")
-    plt.show()
-
 if __name__ == "__main__":
-    plot_sample_predictions()
+    show_predictions()

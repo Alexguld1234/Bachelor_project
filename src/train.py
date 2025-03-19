@@ -2,93 +2,108 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
-from pathlib import Path
+from transformers import AdamW
 from data import get_dataloader
-from model import ChestXrayReportGenerator
-import logging
+from model import RadTexModel
 
-# Setup logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
-# Hyperparameters
+# ✅ Training Configuration
+BATCH_SIZE = 16
 EPOCHS = 10
-BATCH_SIZE = 8
-LEARNING_RATE = 1e-4
-VOCAB_SIZE = 5000  # Placeholder vocab size
-SAVE_PATH = Path("models")  # Model checkpoint directory
-SAVE_PATH.mkdir(parents=True, exist_ok=True)
+LEARNING_RATE = 2e-4
+VOCAB_SIZE = 30522  # GPT-2 default vocab size
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-# Load Data
-train_loader = get_dataloader("data/subset_pneumonia_30.csv", "data/JPG_AP", "data/Reports", mode="train", batch_size=BATCH_SIZE)
-val_loader = get_dataloader("data/subset_pneumonia_30.csv", "data/JPG_AP", "data/Reports", mode="val", batch_size=BATCH_SIZE)
+# ✅ Load Data
+train_loader = get_dataloader(mode="train", batch_size=BATCH_SIZE, shuffle=True)
+val_loader = get_dataloader(mode="val", batch_size=BATCH_SIZE, shuffle=False)
 
-# Initialize Model
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = ChestXrayReportGenerator(VOCAB_SIZE).to(device)
+# ✅ Load Model
+model = RadTexModel(vocab_size=VOCAB_SIZE).to(DEVICE)
 
-# Loss functions
-classification_loss_fn = nn.BCELoss()  # Binary Cross Entropy for pneumonia prediction
-caption_loss_fn = nn.CrossEntropyLoss()  # Cross-Entropy for text generation
+# ✅ Define Losses
+classification_criterion = nn.BCELoss()  # Binary classification loss
+generation_criterion = nn.CrossEntropyLoss(ignore_index=0)  # Ignore padding tokens in text
 
-# Optimizer
-optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
+# ✅ Optimizer
+optimizer = AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
 
-# Training Loop
 def train():
-    logging.info("Starting training...")
-    best_val_loss = float("inf")
-
+    """
+    Train the model for multiple epochs.
+    """
     for epoch in range(EPOCHS):
         model.train()
-        total_train_loss = 0
+        total_class_loss, total_text_loss = 0.0, 0.0
 
         for images, reports, labels in train_loader:
-            images, labels = images.to(device), labels.to(device).float()
+            images, labels = images.to(DEVICE), labels.to(DEVICE).float().unsqueeze(1)  # (batch, 1)
+            
+            # Convert text reports to tokenized tensors (TODO: Use tokenizer)
+            text_inputs = torch.randint(0, VOCAB_SIZE, (images.shape[0], 30)).to(DEVICE)  # Dummy tokenized input
 
-            # Convert reports to tokenized format (Placeholder)
-            tokenized_reports = torch.randint(0, VOCAB_SIZE, (reports.shape[0], 20)).to(device)  # Simulated tokenization
+            optimizer.zero_grad()
 
-            # Forward pass
-            class_pred, report_pred = model(images, tokenized_reports)
+            # Forward Pass
+            class_output, text_output = model(images, text_inputs)
 
             # Compute Loss
-            class_loss = classification_loss_fn(class_pred.squeeze(), labels)
-            report_loss = caption_loss_fn(report_pred.view(-1, VOCAB_SIZE), tokenized_reports.view(-1))
+            class_loss = classification_criterion(class_output, labels)
+            text_loss = generation_criterion(text_output.view(-1, VOCAB_SIZE), text_inputs.view(-1))  # Flattened for CE Loss
 
-            loss = class_loss + report_loss
-            total_train_loss += loss.item()
-
-            # Backpropagation
-            optimizer.zero_grad()
-            loss.backward()
+            total_loss = class_loss + text_loss
+            total_loss.backward()
             optimizer.step()
 
-        avg_train_loss = total_train_loss / len(train_loader)
+            total_class_loss += class_loss.item()
+            total_text_loss += text_loss.item()
 
-        # Validation Phase
-        model.eval()
-        total_val_loss = 0
-        with torch.no_grad():
-            for images, reports, labels in val_loader:
-                images, labels = images.to(device), labels.to(device).float()
-                tokenized_reports = torch.randint(0, VOCAB_SIZE, (reports.shape[0], 20)).to(device)
+        avg_class_loss = total_class_loss / len(train_loader)
+        avg_text_loss = total_text_loss / len(train_loader)
+        print(f"Epoch [{epoch+1}/{EPOCHS}], Class Loss: {avg_class_loss:.4f}, Text Loss: {avg_text_loss:.4f}")
 
-                class_pred, report_pred = model(images, tokenized_reports)
+        # ✅ Validation Step
+        validate()
 
-                class_loss = classification_loss_fn(class_pred.squeeze(), labels)
-                report_loss = caption_loss_fn(report_pred.view(-1, VOCAB_SIZE), tokenized_reports.view(-1))
-                loss = class_loss + report_loss
-                total_val_loss += loss.item()
+    # ✅ Save Model
+    torch.save(model.state_dict(), "radtex_model.pth")
+    print("✅ Model Saved as radtex_model.pth")
 
-        avg_val_loss = total_val_loss / len(val_loader)
 
-        logging.info(f"Epoch [{epoch+1}/{EPOCHS}], Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
+def validate():
+    """
+    Validate the model on the validation set.
+    """
+    model.eval()
+    correct, total = 0, 0
+    total_class_loss, total_text_loss = 0.0, 0.0
 
-        # Save best model
-        if avg_val_loss < best_val_loss:
-            best_val_loss = avg_val_loss
-            torch.save(model.state_dict(), SAVE_PATH / "best_model.pth")
-            logging.info(f"Saved best model at epoch {epoch+1}")
+    with torch.no_grad():
+        for images, reports, labels in val_loader:
+            images, labels = images.to(DEVICE), labels.to(DEVICE).float().unsqueeze(1)
+
+            text_inputs = torch.randint(0, VOCAB_SIZE, (images.shape[0], 30)).to(DEVICE)  # Dummy tokenized input
+
+            # Forward pass
+            class_output, text_output = model(images, text_inputs)
+
+            # Compute Loss
+            class_loss = classification_criterion(class_output, labels)
+            text_loss = generation_criterion(text_output.view(-1, VOCAB_SIZE), text_inputs.view(-1))
+
+            total_class_loss += class_loss.item()
+            total_text_loss += text_loss.item()
+
+            # Compute accuracy for classification
+            predicted = (class_output > 0.5).float()
+            correct += (predicted == labels).sum().item()
+            total += labels.size(0)
+
+    avg_class_loss = total_class_loss / len(val_loader)
+    avg_text_loss = total_text_loss / len(val_loader)
+    accuracy = 100 * correct / total
+
+    print(f"✅ Validation - Class Loss: {avg_class_loss:.4f}, Text Loss: {avg_text_loss:.4f}, Accuracy: {accuracy:.2f}%")
+
 
 if __name__ == "__main__":
     train()

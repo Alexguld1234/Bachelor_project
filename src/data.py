@@ -1,100 +1,95 @@
-import os
-import pandas as pd
 import torch
-import logging
+from torch.utils.data import Dataset, DataLoader, random_split
+import pandas as pd
+import numpy as np
+import random
 from pathlib import Path
 from PIL import Image
-from torch.utils.data import Dataset, DataLoader, random_split
-from torchvision import transforms
-import argparse
+import torchvision.transforms as transforms
 
-# Setup logging - MLOps best practice for tracking issues
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+# ✅ Set Project Paths
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR = PROJECT_ROOT / "data"
+CSV_FILE = DATA_DIR / "subset_pneumonia_30.csv"
+IMG_DIR = DATA_DIR / "JPG_AP"
+REPORTS_DIR = DATA_DIR / "Reports"
+
+def set_seed(seed=42):
+    """Ensures reproducibility across runs."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 class ChestXrayDataset(Dataset):
-    def __init__(self, csv_file, img_dir, reports_dir, transform=None, mode="train", split=(0.8, 0.1, 0.1)):
-        """
-        Args:
-            csv_file (str): Path to subset_pneumonia_30.csv.
-            img_dir (str): Directory with JPG_AP images.
-            reports_dir (str): Directory with free-text reports.
-            transform (callable, optional): Optional transform to apply to images.
-            mode (str): "train", "val", or "test".
-            split (tuple): (train, val, test) fractions.
-        """
+    def __init__(self, mode="train", split=(0.8, 0.1, 0.1), csv_file=CSV_FILE, transform=None):
+        set_seed(42)
+        print(f"📂 Loading dataset from: {csv_file}")
         self.data = pd.read_csv(csv_file)
-        self.img_dir = Path(img_dir)
-        self.reports_dir = Path(reports_dir)
-        self.transform = transform
         self.mode = mode
+        self.transform = transform if transform else transforms.Compose([
+            transforms.Grayscale(num_output_channels=1),  # ✅ Force Grayscale
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+        ])
 
-        # Splitting dataset
+        self.data["txt_path"] = self.data["study_id"].apply(lambda x: REPORTS_DIR / f"s{x}.txt")
+        self.data["jpg_path"] = self.data["dicom_id"].apply(lambda x: IMG_DIR / f"{x}.jpg")
+
         dataset_size = len(self.data)
         train_size = int(split[0] * dataset_size)
         val_size = int(split[1] * dataset_size)
         test_size = dataset_size - train_size - val_size
 
-        self.train_data, self.val_data, self.test_data = random_split(self.data.to_dict(orient="records"), [train_size, val_size, test_size])
+        self.train_data, self.val_data, self.test_data = random_split(
+            self.data.to_dict(orient="records"), [train_size, val_size, test_size], generator=torch.Generator().manual_seed(42)
+        )
 
         if self.mode == "train":
-            self.data = self.train_data
+            self.current_data = self.train_data
         elif self.mode == "val":
-            self.data = self.val_data
+            self.current_data = self.val_data
         elif self.mode == "test":
-            self.data = self.test_data
+            self.current_data = self.test_data
         else:
             raise ValueError("Mode must be 'train', 'val', or 'test'.")
 
+        print(f"✅ Dataset Loaded: {self.mode} set with {len(self.current_data)} samples.")
+
     def __len__(self):
-        return len(self.data)
+        return len(self.current_data)
 
     def __getitem__(self, idx):
-        sample = self.data[idx]
+        sample = self.current_data[idx]
 
-        # Load Image
-        img_path = self.img_dir / f"{sample['dicom_id']}.jpg"
-        image = Image.open(img_path).convert("RGB")  # Ensure it's RGB
+        # Load image
+        img_path = sample["jpg_path"]
+        image = Image.open(img_path).convert("L")  # ✅ Force Grayscale
+        image = self.transform(image)  # Apply transforms
 
-        # Load Report
-        report_path = self.reports_dir / f"s{sample['study_id']}.txt"
-        with open(report_path, "r", encoding="utf-8") as f:
-            report_text = f.read().strip()
+        # Load text report
+        txt_path = sample["txt_path"]
+        try:
+            with open(txt_path, "r", encoding="utf-8") as file:
+                text_report = file.read()
+        except FileNotFoundError:
+            text_report = ""
 
-        # Get label
-        label = sample["Pneumonia"]
+        label = torch.tensor(sample.get("label", 0), dtype=torch.float)
 
-        # Apply transformations (if any)
-        if self.transform:
-            image = self.transform(image)
+        return image, text_report, label
 
-        return image, report_text, label
-
-
-def get_dataloader(csv_path, img_dir, reports_dir, mode="train", batch_size=8, split=(0.8, 0.1, 0.1), num_workers=2):
+def get_dataloader(mode="train", batch_size=32, shuffle=True, transform=None):
     """
-    Returns a PyTorch DataLoader for the dataset.
+    Returns a DataLoader for the specified dataset split.
     """
-    dataset = ChestXrayDataset(csv_path, img_dir, reports_dir, mode=mode, split=split)
-    shuffle = mode == "train"
-    return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
-
+    dataset = ChestXrayDataset(mode=mode, transform=transform)
+    return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
 
 if __name__ == "__main__":
-    # CLI Argument Parsing - MLOps best practice for modularity
-    parser = argparse.ArgumentParser(description="Chest X-ray Data Loader")
-    parser.add_argument("--csv_path", type=str, default="data/subset_pneumonia_30.csv", help="Path to the CSV file")
-    parser.add_argument("--img_dir", type=str, default="data/JPG_AP", help="Path to the images directory")
-    parser.add_argument("--reports_dir", type=str, default="data/Reports", help="Path to the reports directory")
-    parser.add_argument("--batch_size", type=int, default=8, help="Batch size for DataLoader")
-    parser.add_argument("--mode", type=str, choices=["train", "val", "test"], default="train", help="Dataset mode")
-    args = parser.parse_args()
-
-    dataloader = get_dataloader(args.csv_path, args.img_dir, args.reports_dir, mode=args.mode, batch_size=args.batch_size)
-
-    # Example loop through the dataset
+    # ✅ Test DataLoader
+    dataloader = get_dataloader("train", batch_size=4)
     for images, reports, labels in dataloader:
-        logging.info(f"Batch Size: {len(images)}")
-        logging.info(f"First Image Shape: {images[0].size}")
-        logging.info(f"First Report: {reports[0][:100]}...")  # Show only first 100 chars
-        logging.info(f"Labels: {labels}")
+        print(f"Batch - Images: {images.shape}, Reports: {len(reports)}, Labels: {labels.shape}")
         break
