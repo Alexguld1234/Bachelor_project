@@ -10,7 +10,7 @@ import torchvision.transforms as transforms
 # ✅ Set Project Paths
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
-CSV_FILE = DATA_DIR / "subset_pneumonia_30.csv"
+CSV_FILE = DATA_DIR / "subset_pneumonia_50.csv"
 IMG_DIR = DATA_DIR / "JPG_AP"
 REPORTS_DIR = DATA_DIR / "Reports"
 

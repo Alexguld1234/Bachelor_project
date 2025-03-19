@@ -5,10 +5,14 @@ from torch.utils.data import DataLoader
 from transformers import AdamW
 from data import get_dataloader
 from model import RadTexModel
+from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained("allenai/scibert_scivocab_uncased")
+
 
 # ✅ Training Configuration
 BATCH_SIZE = 16
-EPOCHS = 10
+EPOCHS = 3
 LEARNING_RATE = 2e-4
 VOCAB_SIZE = 30522  # GPT-2 default vocab size
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -38,9 +42,12 @@ def train():
         for images, reports, labels in train_loader:
             images, labels = images.to(DEVICE), labels.to(DEVICE).float().unsqueeze(1)  # (batch, 1)
             
-            # Convert text reports to tokenized tensors (TODO: Use tokenizer)
-            text_inputs = torch.randint(0, VOCAB_SIZE, (images.shape[0], 30)).to(DEVICE)  # Dummy tokenized input
-
+            tokenized_reports = tokenizer(reports, padding=True, truncation=True, max_length=170, return_tensors="pt")
+    
+        # Convert tokenized input to tensors
+            text_inputs = tokenized_reports["input_ids"].to(DEVICE)  # (batch_size, seq_length)
+            
+            #print(f"--------\n{text_inputs}\n----------")
             optimizer.zero_grad()
 
             # Forward Pass
@@ -81,7 +88,7 @@ def validate():
         for images, reports, labels in val_loader:
             images, labels = images.to(DEVICE), labels.to(DEVICE).float().unsqueeze(1)
 
-            text_inputs = torch.randint(0, VOCAB_SIZE, (images.shape[0], 30)).to(DEVICE)  # Dummy tokenized input
+            text_inputs = torch.randint(0, VOCAB_SIZE, (images.shape[0], 50)).to(DEVICE)  # Dummy tokenized input
 
             # Forward pass
             class_output, text_output = model(images, text_inputs)

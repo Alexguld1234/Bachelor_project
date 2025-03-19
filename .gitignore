@@ -29,6 +29,7 @@ data/*
 notebooks/create_dataset.ipynb
 Own_files/*
 notebooks/*
+radtex_model.pth
 
 # Distribution / packaging
 .Python

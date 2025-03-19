@@ -11,6 +11,14 @@ from rouge_score import rouge_scorer
 from nltk.tokenize import word_tokenize
 import nltk
 #nltk.download('punkt')
+from transformers import AutoTokenizer
+
+# ✅ Load SciBERT Tokenizer
+tokenizer = AutoTokenizer.from_pretrained("allenai/scibert_scivocab_uncased")
+
+
+
+# ✅ Ensure Model Aware of New Token (Important!)
 
 # ✅ Load Model & Tokenizer
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -19,7 +27,7 @@ model = RadTexModel(vocab_size=VOCAB_SIZE).to(DEVICE)
 model.load_state_dict(torch.load("radtex_model.pth", map_location=DEVICE, weights_only=True))
 model.eval()
 
-tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+
 
 # ✅ Load Test Data
 test_loader = get_dataloader(mode="test", batch_size=8, shuffle=False)
@@ -39,8 +47,10 @@ def evaluate():
         for images, reports, labels in test_loader:
             images, labels = images.to(DEVICE), labels.to(DEVICE).float().unsqueeze(1)
 
-            # Generate text (dummy token input for inference)
-            text_inputs = torch.randint(0, VOCAB_SIZE, (images.shape[0], 30)).to(DEVICE)
+            tokenized_reports = tokenizer(reports, padding=True, truncation=True, max_length=170, return_tensors="pt")
+    
+            # Convert tokenized input to tensors
+            text_inputs = tokenized_reports["input_ids"].to(DEVICE)  # (batch_size, seq_length)
             class_output, text_output = model(images, text_inputs)
 
             # ✅ Classification Evaluation
@@ -54,9 +64,10 @@ def evaluate():
             # ✅ Text Generation Evaluation
             generated_ids = text_output.argmax(dim=-1).cpu().tolist()
             generated_texts = [tokenizer.decode(g, skip_special_tokens=True) for g in generated_ids]
-
+            for i in range(len(generated_texts)):
+                print(f"------------------\n{generated_texts[i]}\n------------------{reports[i]}\n------------------")
             all_generated_texts.extend(generated_texts)
-            all_reference_texts.extend(reports)  # Assuming `reports` are raw reference texts
+            all_reference_texts.extend(reports)  # Assuming reports are raw reference texts
 
     # Compute Metrics
     accuracy = accuracy_score(all_labels, all_preds)
