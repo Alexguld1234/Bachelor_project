@@ -30,6 +30,9 @@ notebooks/create_dataset.ipynb
 Own_files/*
 notebooks/*
 radtex_model.pth
+radtex_model_40_v1.pth
+radtex_model_40_v2.pth
+radtex_model_40_v3.pth
 
 # Distribution / packaging
 .Python
