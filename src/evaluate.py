@@ -16,7 +16,7 @@ tokenizer.padding_side = "left"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 VOCAB_SIZE = tokenizer.vocab_size
 model = RadTexModel(vocab_size=VOCAB_SIZE).to(DEVICE)
-model.load_state_dict(torch.load("radtex_model_40_v3.pth", map_location=DEVICE))
+model.load_state_dict(torch.load("radtex_model.pth", map_location=DEVICE))
 model.eval()
 
 # ✅ Load Data
