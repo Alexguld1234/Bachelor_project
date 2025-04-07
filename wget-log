@@ -1,0 +1,19 @@
+18.18.42.54
+Connecting to physionet.org (physionet.org)|18.18.42.54|:443... connected.
+HTTP request sent, awaiting response... 401 Unauthorized
+Authentication selected: Basic realm="PhysioNet", charset="UTF-8"
+Reusing existing connection to physionet.org:443.
+HTTP request sent, awaiting response... 200 OK
+Length: 1765183 (1.7M) [image/jpeg]
+Saving to: ‘/mnt/d/physionet.org/files/mimic-cxr-jpg/2.1.0/files/p15/p15936063/s53448427/1912b003-6f676a5e-1d526112-b400bbae-22b073e2.jpg’
+
+     0K .......... .......... .......... .......... ..........  2% 1.11M 1s
+    50K .......... .......... .......... .......... ..........  5%  265K 4s
+   100K .......... .......... .......... .......... ..........  8%  441K 4s
+   150K .......... .......... .......... .......... .......... 11% 1.07M 3s
+   200K .......... .......... .......... .......... .......... 14%  455K 3s
+   250K .......... .......... .......... .......... .......... 17%  359K 3s
+   300K .......... .......... .......... .......... .......... 20%  442K 3s
+   350K .......... .......... .......... .......... .......... 23%  354K 3s
+   400K .......... .......... .......... .......... .......... 26%  361K 3s
+   450K .......... ...
