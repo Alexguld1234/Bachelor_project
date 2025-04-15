@@ -10,7 +10,7 @@ import torchvision.transforms as transforms
 # ✅ Set Project Paths
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
-CSV_FILE = DATA_DIR / "subset_pneumonia_30.csv"
+CSV_FILE = DATA_DIR / "All_AP_pic_w_urls_50000.csv"
 IMG_DIR = DATA_DIR / "JPG_AP"
 REPORTS_DIR = DATA_DIR / "Reports"
 
@@ -29,13 +29,14 @@ class ChestXrayDataset(Dataset):
         self.data = pd.read_csv(csv_file)
         self.mode = mode
         self.transform = transform if transform else transforms.Compose([
-            transforms.Grayscale(num_output_channels=1),  # ✅ Force Grayscale
+            transforms.Grayscale(num_output_channels=1),
             transforms.Resize((224, 224)),
             transforms.ToTensor(),
         ])
 
-        self.data["txt_path"] = self.data["study_id"].apply(lambda x: REPORTS_DIR / f"s{x}.txt")
-        self.data["jpg_path"] = self.data["dicom_id"].apply(lambda x: IMG_DIR / f"{x}.jpg")
+        # Use the full paths from the CSV directly
+        self.data["txt_path"] = self.data["txt_urls"].apply(Path)
+        self.data["jpg_path"] = self.data["urls"].apply(Path)
 
         dataset_size = len(self.data)
         train_size = int(split[0] * dataset_size)
@@ -65,8 +66,8 @@ class ChestXrayDataset(Dataset):
 
         # Load image
         img_path = sample["jpg_path"]
-        image = Image.open(img_path).convert("L")  # ✅ Force Grayscale
-        image = self.transform(image)  # Apply transforms
+        image = Image.open(img_path).convert("L")
+        image = self.transform(image)
 
         # Load text report
         txt_path = sample["txt_path"]

@@ -33,7 +33,7 @@ radtex_model.pth
 radtex_model_40_v1.pth
 radtex_model_40_v2.pth
 radtex_model_40_v3.pth
-
+https
 # Distribution / packaging
 .Python
 build/

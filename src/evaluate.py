@@ -6,7 +6,7 @@ from transformers import AutoTokenizer
 from nltk.translate.bleu_score import corpus_bleu
 from nltk.translate.meteor_score import meteor_score
 from rouge_score import rouge_scorer
-
+from tqdm import tqdm
 # ✅ Load SciBERT Tokenizer
 tokenizer = AutoTokenizer.from_pretrained("allenai/scibert_scivocab_uncased")
 tokenizer.pad_token = tokenizer.eos_token
@@ -16,7 +16,7 @@ tokenizer.padding_side = "left"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 VOCAB_SIZE = tokenizer.vocab_size
 model = RadTexModel(vocab_size=VOCAB_SIZE).to(DEVICE)
-model.load_state_dict(torch.load("radtex_model.pth", map_location=DEVICE))
+model.load_state_dict(torch.load("radtex_model_epoch1.pth", map_location=DEVICE))
 model.eval()
 
 # ✅ Load Data
@@ -35,7 +35,7 @@ def evaluate():
     print("\n📋 Generating Reports from Images Only...\n")
 
     with torch.no_grad():
-        for images, reports, labels in test_loader:
+        for images, reports, labels in tqdm(test_loader):
             images = images.to(DEVICE)
             labels = labels.to(DEVICE).float().unsqueeze(1)
 
@@ -54,7 +54,7 @@ def evaluate():
             all_generated_texts.extend(generated_texts)
             all_reference_texts.extend(reports)
 
-            for i, text in enumerate(generated_texts):
+            for i, text in enumerate(generated_texts[:10]):
                 print(f"Generated Report {i+1}: {text}\n---------------------\n{reports[i]}\n---------------------")
 
     accuracy = accuracy_score(all_labels, all_preds)

@@ -3,14 +3,15 @@ import torch.nn as nn
 from transformers import AdamW, AutoTokenizer
 from data import get_dataloader
 from model import RadTexModel
+from tqdm import tqdm
 
 tokenizer = AutoTokenizer.from_pretrained("allenai/scibert_scivocab_uncased")
 tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
 tokenizer.padding_side = "left"
 
 BATCH_SIZE = 16
-EPOCHS = 8
-LEARNING_RATE = 2e-4
+EPOCHS = 1                
+LEARNING_RATE = 2e-10
 VOCAB_SIZE = tokenizer.vocab_size
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -26,10 +27,11 @@ optimizer = AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
 
 def train():
     for epoch in range(EPOCHS):
+        print(f"Epoch {epoch+1}/{EPOCHS}")
         model.train()
         total_class_loss, total_text_loss = 0.0, 0.0
 
-        for images, reports, labels in train_loader:
+        for images, reports, labels in tqdm(train_loader):
             images = images.to(DEVICE)
             labels = labels.to(DEVICE).float().unsqueeze(1)
 
@@ -52,7 +54,7 @@ def train():
         print(f"Epoch [{epoch+1}/{EPOCHS}], Class Loss: {total_class_loss / len(train_loader):.4f}, Text Loss: {total_text_loss / len(train_loader):.4f}")
         validate()
 
-    torch.save(model.state_dict(), "radtex_model.pth")
+    torch.save(model.state_dict(), "radtex_model_epoch1.pth")
     print("✅ Model Saved as radtex_model.pth")
 
 def validate():
