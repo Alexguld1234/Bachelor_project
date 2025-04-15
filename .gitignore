@@ -33,6 +33,9 @@ radtex_model.pth
 radtex_model_40_v1.pth
 radtex_model_40_v2.pth
 radtex_model_40_v3.pth
+radtex_model_epoch1.pth
+radtex_model_epoch8.pth
+radtex_model_epoch_3_7500.pth
 https
 # Distribution / packaging
 .Python
