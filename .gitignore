@@ -26,6 +26,7 @@ __pycache__/
 # files
 
 data/*
+!data/All_AP_pic_w_urls_50000.csv
 notebooks/create_dataset.ipynb
 Own_files/*
 notebooks/*
