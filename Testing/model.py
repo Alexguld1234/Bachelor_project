@@ -26,7 +26,7 @@ class RadTexModel(nn.Module):
 
         config = GPT2Config.from_pretrained("gpt2")
         config.add_cross_attention = True
-        config.vocab_size = vocab_size  # Replace GPT-2 vocab with SciBERT vocab
+        config.vocab_size = vocab_size
         config.pad_token_id = config.eos_token_id
         config.bos_token_id = config.bos_token_id or config.eos_token_id
 
