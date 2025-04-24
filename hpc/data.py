@@ -5,11 +5,12 @@ import pandas as pd
 import numpy as np
 import random
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageFile
 import torchvision.transforms as transforms
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
-CSV_FILE = "HPC_AP_url_label_50000.csv"
+CSV_FILE = "/zhome/44/7/187366/Bachelor_project/Bachelor_project/hpc/HPC_AP_url_label_50000.csv"
 
 
 

@@ -1,0 +1,709 @@
+I'm working on my bachelor project where we train a deep learning model on chest X-rays to generate both a free-text radiology report and a label. The codebase consists of five main files:
+
+data.py
+-----
+import argparse
+import torch
+from torch.utils.data import Dataset, DataLoader, random_split
+import pandas as pd
+import numpy as np
+import random
+from pathlib import Path
+from PIL import Image
+import torchvision.transforms as transforms
+
+
+CSV_FILE = "HPC_AP_url_label_50000.csv"
+
+
+
+def set_seed(seed=42):
+    """Set random seed for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+class ChestXrayDataset(Dataset):
+    def __init__(self,
+                mode: str = "train",
+                split: tuple = (0.8, 0.1, 0.1),
+                csv_file: Path = CSV_FILE,
+                transform = None,
+                num_samples: int = None):
+        
+        set_seed(42)
+        print(f"Loading dataset from {csv_file}. Amount: {num_samples}. Mode: {mode}.")
+        self.data = pd.read_csv(csv_file)
+
+        if num_samples is not None:
+            self.data = self.data.sample(n=num_samples, random_state=42).reset_index(drop=True)
+            print(f"Sampled {num_samples} rows from the dataset.")
+        
+
+        self.mode = mode
+        self.transform = transform or transforms.Compose([
+            transforms.Grayscale(num_output_channels=1),
+            transforms.Resize((224,224)),
+            transforms.ToTensor(),
+        ])
+
+        self.data["txt_path"] = self.data["txt_urls"].apply(Path)
+        self.data["jpg_path"] = self.data["urls"].apply(Path)
+
+        dataset_size = len(self.data)
+        train_size = int(split[0] * dataset_size)
+        val_size = int(split[1] * dataset_size)
+        test_size = dataset_size - train_size - val_size
+
+        self.train_data, self.val_data, self.test_data = random_split(
+            self.data.to_dict(orient="records"), [train_size, val_size, test_size], generator=torch.Generator().manual_seed(42)
+        )
+
+        if self.mode == "train":
+            self.current_data = self.train_data
+        elif self.mode == "val":
+            self.current_data = self.val_data
+        elif self.mode == "test":
+            self.current_data = self.test_data
+        else:
+            raise ValueError("Mode must be 'train', 'val', or 'test'.")
+        
+        print(f"✅ Loaded {mode} split: {len(self.current_data)} samples")
+
+    def __len__(self):
+        return len(self.current_data)
+    
+    def __getitem__(self, idx):
+        sample = self.current_data[idx]
+
+
+        # Load image
+        img_path = sample["jpg_path"]
+        image = image = Image.open(img_path).convert("L")
+        image = self.transform(image)
+
+        txt_path = sample["txt_path"]
+        try:
+            with open(txt_path, "r") as f:
+                text_report = f.read()
+        except FileNotFoundError:
+            print(f"File not found: {txt_path}")
+            text_report = ""
+
+        label = torch.tensor(sample.get("pneumonia_label", 3), dtype=torch.long)
+
+        return image, text_report, label
+    
+def get_dataloader(mode: str = "train",
+                   batch_size: int = 32, 
+                   shuffle: bool = True,
+                   num_samples: int = None,
+                   transform=None):
+    dataset = ChestXrayDataset(mode=mode, 
+                               num_samples=num_samples, 
+                               transform=transform)
+    return DataLoader(dataset,
+                      batch_size=batch_size,
+                      shuffle=shuffle)
+
+def main():
+    parser = argparse.ArgumentParser(description="Chest X-ray Dataset Loader")
+    parser.add_argument("--mode", type=str, default="train", choices=["train", "val", "test"], help="Mode of the dataset")
+    parser.add_argument("--batch_size", type=int, default=32, help="Batch size for DataLoader")
+    parser.add_argument("--num_samples", type=int, default=None, help="Number of samples to load from the dataset")
+    parser.add_argument("--shuffle", type=bool, default=True, help="Shuffle the dataset")
+    parser.add_argument("--transform", type=str, default=None, help="Transformations to apply to the images")
+    args = parser.parse_args()
+
+    transform = None
+
+    dataloader = get_dataloader(
+        mode=args.mode,
+        batch_size=args.batch_size,
+        shuffle=args.shuffle,
+        transform=transform,
+        num_samples=args.num_samples
+    )
+    # Inspect one batch
+    for images, reports, labels in dataloader:
+        print(f"Batch → Images: {images.shape}, Reports: {len(reports)}, Labels: {labels.shape}")
+        break
+    
+
+if __name__ == "__main__":
+    main()
+      
+-----
+model.py
+-----
+import torch
+import torch.nn as nn
+import torchvision.models as models
+from transformers import GPT2LMHeadModel, GPT2Config
+
+class ResNet50Backbone(nn.Module):
+    def __init__(self, pretrained=True):
+        super().__init__()
+        resnet50 = models.resnet50(weights=models.ResNet50_Weights.DEFAULT if pretrained else None)
+        self.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        self.conv1.weight = nn.Parameter(torch.mean(resnet50.conv1.weight, dim=1, keepdim=True))
+        self.feature_extractor = nn.Sequential(*list(resnet50.children())[1:-2])
+        self.flatten = nn.AdaptiveAvgPool2d((1, 1))
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.feature_extractor(x)
+        x = self.flatten(x)
+        return torch.flatten(x, 1)
+
+class RadTexModel(nn.Module):
+    def __init__(self, vocab_size, num_classes=4, pretrained_backbone=True):
+        super().__init__()
+        self.visual_backbone = ResNet50Backbone(pretrained=pretrained_backbone)
+        self.feature_projection = nn.Linear(2048, 768)
+
+        config = GPT2Config.from_pretrained("gpt2")
+        config.add_cross_attention = True
+        config.vocab_size = vocab_size
+        config.pad_token_id = config.eos_token_id
+        config.bos_token_id = config.bos_token_id or config.eos_token_id
+
+        self.text_decoder = GPT2LMHeadModel(config)
+        self.text_decoder.resize_token_embeddings(vocab_size)
+
+        self.classifier = nn.Sequential(
+            nn.Linear(2048, 512),
+            nn.ReLU(),
+            nn.Linear(512, num_classes),
+            nn.Sigmoid()
+        )
+
+    def forward(self, images, text_inputs=None, generate=False, max_length=500):
+        visual_features = self.visual_backbone(images)
+        projected_features = self.feature_projection(visual_features)
+        classification_output = self.classifier(visual_features)
+
+        if generate and text_inputs is not None:
+            encoder_hidden_states = projected_features.unsqueeze(1)
+            attention_mask = torch.ones_like(text_inputs)
+
+            generated_ids = self.text_decoder.generate(
+                input_ids=text_inputs,
+                encoder_hidden_states=encoder_hidden_states,
+                attention_mask=attention_mask,
+                max_length=max_length,
+                pad_token_id=self.text_decoder.config.pad_token_id,
+                eos_token_id=self.text_decoder.config.eos_token_id,
+                bos_token_id=self.text_decoder.config.bos_token_id,
+                do_sample=True,
+                top_k=50,
+                top_p=0.95,
+                repetition_penalty=1.9
+            )
+            return classification_output, generated_ids
+
+        elif text_inputs is not None:
+            seq_len = text_inputs.shape[1]
+            repeated_features = projected_features.unsqueeze(1).repeat(1, seq_len, 1)
+            logits = self.text_decoder(
+                input_ids=text_inputs,
+                encoder_hidden_states=repeated_features
+            ).logits
+            return classification_output, logits
+
+        return classification_output, None
+
+# ✅ Helper for pipeline use
+def build_model(vocab_size: int, pretrained_backbone=True):
+    return RadTexModel(vocab_size=vocab_size, pretrained_backbone=pretrained_backbone)
+
+-----
+
+train.py
+-----
+import torch
+import torch.nn as nn
+from transformers import AdamW, AutoTokenizer
+from tqdm import tqdm
+
+from data import get_dataloader
+from model import RadTexModel
+
+def get_tokenizer():
+    tokenizer = AutoTokenizer.from_pretrained("allenai/scibert_scivocab_uncased")
+    tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
+    tokenizer.padding_side = "left"
+    return tokenizer
+
+def train(model, train_loader, val_loader, tokenizer, epochs=1, lr=2e-5, save_path="radtex_model.pth", device="cuda"):
+    model = model.to(device)
+    vocab_size = tokenizer.vocab_size
+
+    classification_criterion = nn.CrossEntropyLoss()
+    generation_criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
+    optimizer = AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
+
+    for epoch in range(epochs):
+        print(f"\n🔥 Epoch {epoch+1}/{epochs}")
+        model.train()
+        total_class_loss, total_text_loss = 0.0, 0.0
+
+        for images, reports, labels in tqdm(train_loader):
+            images = images.to(device)
+            labels = labels.to(device).long()
+
+            tokenized = tokenizer(reports, padding=True, truncation=True, max_length=128, return_tensors="pt")
+            text_inputs = tokenized["input_ids"].to(device)
+
+            optimizer.zero_grad()
+            class_output, text_output = model(images, text_inputs=text_inputs)
+
+            class_loss = classification_criterion(class_output, labels)
+            text_loss = generation_criterion(text_output.view(-1, vocab_size), text_inputs.view(-1))
+            total_loss = class_loss + text_loss
+
+            total_loss.backward()
+            optimizer.step()
+
+            total_class_loss += class_loss.item()
+            total_text_loss += text_loss.item()
+
+        print(f"🧪 Epoch [{epoch+1}/{epochs}] | Class Loss: {total_class_loss / len(train_loader):.4f}, Text Loss: {total_text_loss / len(train_loader):.4f}")
+        validate(model, val_loader, tokenizer, vocab_size, classification_criterion, generation_criterion, device)
+
+    torch.save(model.state_dict(), save_path)
+    print(f"✅ Model saved at {save_path}")
+
+def validate(model, val_loader, tokenizer, vocab_size, classification_criterion, generation_criterion, device):
+    model.eval()
+    correct, total = 0, 0
+    total_class_loss, total_text_loss = 0.0, 0.0
+
+    with torch.no_grad():
+        for images, reports, labels in val_loader:
+            images = images.to(device)
+            labels = labels.to(device).long()
+
+            tokenized = tokenizer(reports, padding=True, truncation=True, max_length=128, return_tensors="pt")
+            text_inputs = tokenized["input_ids"].to(device)
+
+            class_output, text_output = model(images, text_inputs=text_inputs)
+
+            class_loss = classification_criterion(class_output, labels)
+            text_loss = generation_criterion(text_output.view(-1, vocab_size), text_inputs.view(-1))
+
+            total_class_loss += class_loss.item()
+            total_text_loss += text_loss.item()
+
+            predicted = class_output.argmax(dim=1)
+            correct += (predicted == labels).sum().item()
+            total += labels.size(0)
+
+    acc = 100 * correct / total
+    print(f"🔍 Validation — Class Loss: {total_class_loss / len(val_loader):.4f}, Text Loss: {total_text_loss / len(val_loader):.4f}, Accuracy: {acc:.2f}%")
+
+if __name__ == "__main__":
+    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+    tokenizer = get_tokenizer()
+
+    train_loader = get_dataloader(mode="train", batch_size=16)
+    val_loader = get_dataloader(mode="val", batch_size=16)
+
+    model = RadTexModel(vocab_size=tokenizer.vocab_size, num_classes=4)
+    train(model, train_loader, val_loader, tokenizer, epochs=1, device=DEVICE)
+
+-----
+
+evaluate.py
+-----
+import torch
+from sklearn.metrics import accuracy_score
+from data import get_dataloader
+from model import RadTexModel
+from transformers import AutoTokenizer
+from nltk.translate.meteor_score import meteor_score
+from rouge_score import rouge_scorer
+from tqdm import tqdm
+
+def evaluate(model_path="radtex_model_epoch1.pth", batch_size=8, device="cuda"):
+    tokenizer = AutoTokenizer.from_pretrained("allenai/scibert_scivocab_uncased")
+    tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"
+
+    device = torch.device(device if torch.cuda.is_available() else "cpu")
+    vocab_size = tokenizer.vocab_size
+
+    # Load model
+    model = RadTexModel(vocab_size=vocab_size, num_classes=4).to(device)
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.eval()
+
+    test_loader = get_dataloader(mode="test", batch_size=batch_size, shuffle=False)
+
+    prompt = "FINAL REPORT\n\n"
+    prompt_inputs = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
+
+    all_preds, all_labels = [], []
+    all_generated_texts, all_reference_texts = [], []
+
+    print("\n📋 Generating Reports from Images...\n")
+    with torch.no_grad():
+        for images, reports, labels in tqdm(test_loader):
+            images = images.to(device)
+            labels = labels.to(device).long()
+
+            class_output, generated_ids = model(
+                images,
+                text_inputs=prompt_inputs.repeat(images.size(0), 1),
+                generate=True,
+                max_length=128
+            )
+
+            predicted_labels = class_output.argmax(dim=1).cpu().numpy()
+            all_preds.extend(predicted_labels)
+            all_labels.extend(labels.cpu().numpy())
+
+            generated_texts = [tokenizer.decode(ids, skip_special_tokens=True) for ids in generated_ids]
+            all_generated_texts.extend(generated_texts)
+            all_reference_texts.extend(reports)
+
+            for i, text in enumerate(generated_texts[:5]):
+                print(f"\nGenerated Report {i+1}:\n{text}\n----\nOriginal:\n{reports[i]}\n")
+
+    # Classification Metrics
+    accuracy = accuracy_score(all_labels, all_preds)
+
+    # Text Metrics
+    rouge = rouge_scorer.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=True)
+    rouge_scores = [rouge.score(ref, gen) for ref, gen in zip(all_reference_texts, all_generated_texts)]
+    avg_rouge = {k: sum(d[k].fmeasure for d in rouge_scores) / len(rouge_scores) for k in rouge_scores[0]}
+
+    meteor_scores = [
+        meteor_score([ref.split()], gen.split()) for ref, gen in zip(all_reference_texts, all_generated_texts)
+    ]
+    avg_meteor = sum(meteor_scores) / len(meteor_scores)
+
+    print("\n✅ **Evaluation Results:**")
+    print(f"🔹 Accuracy: {accuracy:.4f}")
+    print(f"🔹 ROUGE: {avg_rouge}")
+    print(f"🔹 METEOR: {avg_meteor:.4f}")
+
+if __name__ == "__main__":
+    evaluate()
+
+-----
+
+visualize.py
+-----
+import torch
+import matplotlib.pyplot as plt
+from torchvision.utils import make_grid
+from data import get_dataloader
+from model import RadTexModel
+from transformers import AutoTokenizer
+
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def visualize_predictions(model_path="radtex_model.pth", batch_size=8):
+    tokenizer = AutoTokenizer.from_pretrained("allenai/scibert_scivocab_uncased")
+    tokenizer.pad_token = tokenizer.eos_token
+
+    model = RadTexModel(vocab_size=tokenizer.vocab_size, num_classes=4).to(DEVICE)
+    model.load_state_dict(torch.load(model_path, map_location=DEVICE))
+    model.eval()
+
+    test_loader = get_dataloader(mode="test", batch_size=batch_size, shuffle=False)
+    images, reports, labels = next(iter(test_loader))
+
+    images = images.to(DEVICE)
+    labels = labels.to(DEVICE).long()
+
+    prompt = "FINAL REPORT\n\n"
+    prompt_inputs = tokenizer(prompt, return_tensors="pt").input_ids.to(DEVICE)
+    text_inputs = prompt_inputs.repeat(images.size(0), 1)
+
+    with torch.no_grad():
+        class_output, generated_ids = model(images, text_inputs=text_inputs, generate=True, max_length=128)
+
+    predicted_labels = class_output.argmax(dim=1).cpu().numpy()
+    generated_texts = [tokenizer.decode(ids, skip_special_tokens=True) for ids in generated_ids]
+
+    fig, axes = plt.subplots(2, 4, figsize=(15, 8))
+    for i, ax in enumerate(axes.flat):
+        if i >= len(images): break
+        ax.imshow(images[i].cpu().squeeze(), cmap="gray")
+        ax.set_title(f"Pred: {predicted_labels[i]}, True: {labels[i].item()}")
+        ax.set_xlabel(f"Gen: {generated_texts[i][:40]}...\nRef: {reports[i][:40]}...")
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+    plt.tight_layout()
+    plt.show()
+
+if __name__ == "__main__":
+    visualize_predictions()
+
+------
+
+We're running everything on an HPC cluster
+And so i have created a sixth file called "run_pipeline.py"
+This script should serve as the main entry point for the project and support a command-line interface (CLI) for all the important parameters used across the other five files.
+-----
+
+import argparse
+import os
+import sys
+import yaml
+import shutil
+import time
+import torch
+import platform
+from pathlib import Path
+from datetime import datetime
+
+from model import build_model
+from data import get_dataloader
+from train import train, get_tokenizer
+from evaluate import evaluate
+from visualize import visualize_predictions
+
+def log_system_info(save_dir):
+    info = {
+        "Python version": sys.version,
+        "Platform": platform.platform(),
+        "CUDA available": torch.cuda.is_available(),
+        "GPU name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU"
+    }
+    with open(save_dir / "system_info.yaml", "w") as f:
+        yaml.dump(info, f)
+
+def save_config(args, save_dir):
+    config_path = save_dir / "config.yaml"
+    with open(config_path, "w") as f:
+        yaml.dump(vars(args), f)
+
+def main():
+    parser = argparse.ArgumentParser(description="Full Chest X-ray Pipeline")
+
+    # Experiment setup
+    parser.add_argument("--name", type=str, required=True, help="Run name")
+    parser.add_argument("--save_path", type=str, default="./runs", help="Base directory to save outputs")
+
+    # Training params
+    parser.add_argument("--epochs", type=int, default=1)
+    parser.add_argument("--batch_size", type=int, default=16)
+    parser.add_argument("--learning_rate", type=float, default=2e-5)
+    parser.add_argument("--num_datapoints", type=int, default=None, help="Subset of dataset")
+
+    # Resume
+    parser.add_argument("--resume", action="store_true", help="Resume from latest checkpoint")
+
+    args = parser.parse_args()
+
+    # Create output folder
+    run_time = datetime.now().strftime("%d-%m-%y--%H.%M")
+    run_dir = Path(args.save_path) / f"{args.name}_{run_time}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save config and system info
+    save_config(args, run_dir)
+    log_system_info(run_dir)
+
+    # Start timer
+    start_time = time.time()
+
+    # Tokenizer & model
+    tokenizer = get_tokenizer()
+    model = build_model(vocab_size=tokenizer.vocab_size, pretrained_backbone=True)
+
+    # Resume training
+    checkpoint_path = run_dir / "checkpoint.pth"
+    if args.resume and checkpoint_path.exists():
+        model.load_state_dict(torch.load(checkpoint_path))
+        print("✅ Resumed from checkpoint.")
+
+    # Dataloaders
+    train_loader = get_dataloader(mode="train", batch_size=args.batch_size, num_samples=args.num_datapoints)
+    val_loader = get_dataloader(mode="val", batch_size=args.batch_size, num_samples=args.num_datapoints)
+
+    # Train
+    train(model=model,
+          train_loader=train_loader,
+          val_loader=val_loader,
+          tokenizer=tokenizer,
+          epochs=args.epochs,
+          lr=args.learning_rate,
+          save_path=str(checkpoint_path),
+          device="cuda" if torch.cuda.is_available() else "cpu")
+
+    # Evaluate
+    sys.stdout = open(run_dir / "log.txt", "w")
+    evaluate(model_path=str(checkpoint_path),
+             batch_size=args.batch_size,
+             device="cuda" if torch.cuda.is_available() else "cpu")
+
+    # Visualize
+    sys.stdout = sys.__stdout__
+    visualize_predictions(model_path=str(checkpoint_path), batch_size=args.batch_size)
+
+    # Save runtime
+    total_time = time.time() - start_time
+    with open(run_dir / "runtime.txt", "w") as f:
+        f.write(f"Total time (s): {total_time:.2f}\n")
+
+    print(f"\n✅ Done! Outputs saved to: {run_dir}")
+
+if __name__ == "__main__":
+    main()
+
+-----
+
+
+And therefore i have also made a .sh file to run it.
+----
+#!/bin/sh
+### General options
+#BSUB -q gpua100
+#BSUB -J chestxray_pipeline
+#BSUB -o chestxray_pipeline_%J.out
+#BSUB -e chestxray_pipeline_%J.err
+#BSUB -n 4
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -W 72:00
+#BSUB -R "rusage[mem=16GB]"
+#BSUB -M 16GB
+#BSUB -u s224228@dtu.dk
+#BSUB -B
+#BSUB -N
+
+# ✅ Activate your virtual environment
+source /zhome/44/7/187366/Bachelor_project/bachelor/bin/activate
+
+# ✅ Set CUDA device manually (optional but clean)
+export CUDA_VISIBLE_DEVICES=0
+
+# ✅ Run the full pipeline
+python hpc/run_pipeline.py \
+    --name chestxray_experiment \
+    --epochs 1 \
+    --batch_size 5 \
+    --learning_rate 2e-2 \
+    --num_datapoints 20 \
+    --save_path /work3/s224228/bachelor_runs
+
+----
+
+And just a final note.
+The data loader reads a csv file the PATH
+/zhome/44/7/187366/Bachelor_project/Bachelor_project/data/HPC_AP_url_label_50000.csv
+
+Which has the columns
+subject_id,study_id,dicom_id,urls,txt_urls,Pneumonia,pneumonia_label
+1 example is 
+11941242,50000014,dffc8ab2-ff37704f-2fb29e6d-51e08075-88bca914,/work3/s224228/physionet.org/files/mimic-cxr-jpg/2.1.0/files/p11/p11941242/s50000014/dffc8ab2-ff37704f-2fb29e6d-51e08075-88bca914.jpg,/work3/s224228/physionet.org/files/mimic-cxr/2.1.0/files/p11/p11941242/s50000014.txt,-1.0,2
+
+
+As you can see, the data is stored at /work3/s224228/
+
+I run it on HPC. I get the following error.
+
+Help me fix it by showing which file i should change
+And what i should change
+and into what
+
+Example
+in data.py
+change 
+a=2
+into 
+a=5
+
+
+----
+Traceback (most recent call last):
+  File "/zhome/44/7/187366/Bachelor_project/bachelor/lib/python3.10/site-packages/nltk/corpus/util.py", line 84, in __load
+    root = nltk.data.find(f"{self.subdir}/{zip_name}")
+  File "/zhome/44/7/187366/Bachelor_project/bachelor/lib/python3.10/site-packages/nltk/data.py", line 579, in find
+    raise LookupError(resource_not_found)
+LookupError: 
+**********************************************************************
+  Resource [93mwordnet[0m not found.
+  Please use the NLTK Downloader to obtain the resource:
+
+  [31m>>> import nltk
+  >>> nltk.download('wordnet')
+  [0m
+  For more information see: https://www.nltk.org/data.html
+
+  Attempted to load [93mcorpora/wordnet.zip/wordnet/[0m
+
+  Searched in:
+    - '/zhome/44/7/187366/nltk_data'
+    - '/zhome/44/7/187366/Bachelor_project/bachelor/nltk_data'
+    - '/zhome/44/7/187366/Bachelor_project/bachelor/share/nltk_data'
+    - '/zhome/44/7/187366/Bachelor_project/bachelor/lib/nltk_data'
+    - '/usr/share/nltk_data'
+    - '/usr/local/share/nltk_data'
+    - '/usr/lib/nltk_data'
+    - '/usr/local/lib/nltk_data'
+**********************************************************************
+
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/zhome/44/7/187366/Bachelor_project/Bachelor_project/hpc/run_pipeline.py", line 105, in <module>
+    main()
+  File "/zhome/44/7/187366/Bachelor_project/Bachelor_project/hpc/run_pipeline.py", line 89, in main
+    evaluate(model_path=str(checkpoint_path),
+  File "/zhome/44/7/187366/Bachelor_project/Bachelor_project/hpc/evaluate.py", line 63, in evaluate
+    meteor_scores = [
+  File "/zhome/44/7/187366/Bachelor_project/Bachelor_project/hpc/evaluate.py", line 64, in <listcomp>
+    meteor_score([ref.split()], gen.split()) for ref, gen in zip(all_reference_texts, all_generated_texts)
+  File "/zhome/44/7/187366/Bachelor_project/bachelor/lib/python3.10/site-packages/nltk/translate/meteor_score.py", line 397, in meteor_score
+    return max(
+  File "/zhome/44/7/187366/Bachelor_project/bachelor/lib/python3.10/site-packages/nltk/translate/meteor_score.py", line 398, in <genexpr>
+    single_meteor_score(
+  File "/zhome/44/7/187366/Bachelor_project/bachelor/lib/python3.10/site-packages/nltk/translate/meteor_score.py", line 331, in single_meteor_score
+    matches, _, _ = _enum_align_words(
+  File "/zhome/44/7/187366/Bachelor_project/bachelor/lib/python3.10/site-packages/nltk/translate/meteor_score.py", line 223, in _enum_align_words
+    wns_matches, enum_hypothesis_list, enum_reference_list = _enum_wordnetsyn_match(
+  File "/zhome/44/7/187366/Bachelor_project/bachelor/lib/python3.10/site-packages/nltk/translate/meteor_score.py", line 161, in _enum_wordnetsyn_match
+    for synset in wordnet.synsets(enum_hypothesis_list[i][1])
+  File "/zhome/44/7/187366/Bachelor_project/bachelor/lib/python3.10/site-packages/nltk/corpus/util.py", line 120, in __getattr__
+    self.__load()
+  File "/zhome/44/7/187366/Bachelor_project/bachelor/lib/python3.10/site-packages/nltk/corpus/util.py", line 86, in __load
+    raise e
+  File "/zhome/44/7/187366/Bachelor_project/bachelor/lib/python3.10/site-packages/nltk/corpus/util.py", line 81, in __load
+    root = nltk.data.find(f"{self.subdir}/{self.__name}")
+  File "/zhome/44/7/187366/Bachelor_project/bachelor/lib/python3.10/site-packages/nltk/data.py", line 579, in find
+    raise LookupError(resource_not_found)
+LookupError: 
+**********************************************************************
+  Resource [93mwordnet[0m not found.
+  Please use the NLTK Downloader to obtain the resource:
+
+  [31m>>> import nltk
+  >>> nltk.download('wordnet')
+  [0m
+  For more information see: https://www.nltk.org/data.html
+
+  Attempted to load [93mcorpora/wordnet[0m
+
+  Searched in:
+    - '/zhome/44/7/187366/nltk_data'
+    - '/zhome/44/7/187366/Bachelor_project/bachelor/nltk_data'
+    - '/zhome/44/7/187366/Bachelor_project/bachelor/share/nltk_data'
+    - '/zhome/44/7/187366/Bachelor_project/bachelor/lib/nltk_data'
+    - '/usr/share/nltk_data'
+    - '/usr/local/share/nltk_data'
+    - '/usr/lib/nltk_data'
+    - '/usr/local/lib/nltk_data'
+**********************************************************************
+
+
+
+

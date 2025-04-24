@@ -1,6 +1,9 @@
 import torch
 import torch.nn as nn
-from transformers import AdamW, AutoTokenizer
+from transformers import AutoTokenizer
+from torch.optim import Adam
+
+
 from data import get_dataloader
 from model import RadTexModel
 from tqdm import tqdm
@@ -23,7 +26,8 @@ model = RadTexModel(vocab_size=VOCAB_SIZE).to(DEVICE)
 classification_criterion = nn.BCELoss()
 generation_criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
 
-optimizer = AdamW(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-5)
+optimizer = Adam(model.parameters(), lr=lr, weight_decay=1e-5)
+
 
 def train():
     for epoch in range(EPOCHS):

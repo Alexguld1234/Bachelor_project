@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
-from transformers import AdamW, AutoTokenizer
+from transformers import AutoTokenizer
+from torch.optim import Adam
 from tqdm import tqdm
 
 from data import get_dataloader
@@ -18,7 +19,7 @@ def train(model, train_loader, val_loader, tokenizer, epochs=1, lr=2e-5, save_pa
 
     classification_criterion = nn.CrossEntropyLoss()
     generation_criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
-    optimizer = AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
+    optimizer = Adam(model.parameters(), lr=lr, weight_decay=1e-5)
 
     for epoch in range(epochs):
         print(f"\n🔥 Epoch {epoch+1}/{epochs}")

@@ -20,7 +20,7 @@ source /zhome/44/7/187366/Bachelor_project/bachelor/bin/activate
 export CUDA_VISIBLE_DEVICES=0
 
 # ✅ Run the full pipeline
-python run_pipeline.py \
+python hpc/run_pipeline.py \
     --name chestxray_experiment \
     --epochs 1 \
     --batch_size 5 \

@@ -1,5 +1,11 @@
 import torch
+import torch
 from sklearn.metrics import accuracy_score
+
+import nltk
+nltk.data.path.append("/work3/s224228/nltk_data")
+nltk.download('wordnet', download_dir='/work3/s224228/nltk_data')
+
 from data import get_dataloader
 from model import RadTexModel
 from transformers import AutoTokenizer
