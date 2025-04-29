@@ -12,7 +12,7 @@ from transformers import AutoTokenizer
 from nltk.translate.meteor_score import meteor_score
 from rouge_score import rouge_scorer
 from tqdm import tqdm
-
+from model import build_model
 def evaluate(model_path="radtex_model_epoch1.pth", batch_size=8, device="cuda"):
     tokenizer = AutoTokenizer.from_pretrained("allenai/scibert_scivocab_uncased")
     tokenizer.pad_token = tokenizer.eos_token
@@ -22,7 +22,8 @@ def evaluate(model_path="radtex_model_epoch1.pth", batch_size=8, device="cuda"):
     vocab_size = tokenizer.vocab_size
 
     # Load model
-    model = RadTexModel(vocab_size=vocab_size, num_classes=4).to(device)
+    
+    model = build_model("densenet", "biogpt", vocab_size=vocab_size).to(device)   # or load names from saved yaml
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
 

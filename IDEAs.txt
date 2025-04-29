@@ -1,0 +1,5 @@
+HVilke andre pretrained models kan vi bruge? CHATGPT 4.1 ? 
+
+Gem projecktbeskrivelse som txt.
+
+Split up learning rate for encoder and decoder

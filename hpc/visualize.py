@@ -4,6 +4,7 @@ from torchvision.utils import make_grid
 from data import get_dataloader
 from model import RadTexModel
 from transformers import AutoTokenizer
+from model import build_model
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -11,7 +12,8 @@ def visualize_predictions(model_path="radtex_model.pth", batch_size=8):
     tokenizer = AutoTokenizer.from_pretrained("allenai/scibert_scivocab_uncased")
     tokenizer.pad_token = tokenizer.eos_token
 
-    model = RadTexModel(vocab_size=tokenizer.vocab_size, num_classes=4).to(DEVICE)
+    
+    model = build_model("densenet", "biogpt", vocab_size=vocab_size).to(device)   # or load names from saved yaml
     model.load_state_dict(torch.load(model_path, map_location=DEVICE))
     model.eval()
 

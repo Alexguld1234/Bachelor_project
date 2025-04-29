@@ -1,0 +1,718 @@
+data.py
+-----
+import argparse
+import torch
+from torch.utils.data import Dataset, DataLoader, random_split
+import pandas as pd
+import numpy as np
+import random
+from pathlib import Path
+from PIL import Image, ImageFile
+import torchvision.transforms as transforms
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+
+CSV_FILE = "/zhome/44/7/187366/Bachelor_project/Bachelor_project/hpc/HPC_AP_url_label_50000.csv"
+
+
+
+def set_seed(seed=42):
+    """Set random seed for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+class ChestXrayDataset(Dataset):
+    def __init__(self,
+                mode: str = "train",
+                split: tuple = (0.8, 0.1, 0.1),
+                csv_file: Path = CSV_FILE,
+                transform = None,
+                num_samples: int = None):
+        
+        set_seed(42)
+        print(f"Loading dataset from {csv_file}. Amount: {num_samples}. Mode: {mode}.")
+        self.data = pd.read_csv(csv_file)
+
+        if num_samples is not None:
+            self.data = self.data.sample(n=num_samples, random_state=42).reset_index(drop=True)
+            print(f"Sampled {num_samples} rows from the dataset.")
+        
+
+        self.mode = mode
+        self.transform = transform or transforms.Compose([
+            transforms.Grayscale(num_output_channels=1),
+            transforms.Resize((224,224)),
+            transforms.ToTensor(),
+        ])
+
+        self.data["txt_path"] = self.data["txt_urls"].apply(Path)
+        self.data["jpg_path"] = self.data["urls"].apply(Path)
+
+        dataset_size = len(self.data)
+        train_size = int(split[0] * dataset_size)
+        val_size = int(split[1] * dataset_size)
+        test_size = dataset_size - train_size - val_size
+
+        self.train_data, self.val_data, self.test_data = random_split(
+            self.data.to_dict(orient="records"), [train_size, val_size, test_size], generator=torch.Generator().manual_seed(42)
+        )
+
+        if self.mode == "train":
+            self.current_data = self.train_data
+        elif self.mode == "val":
+            self.current_data = self.val_data
+        elif self.mode == "test":
+            self.current_data = self.test_data
+        else:
+            raise ValueError("Mode must be 'train', 'val', or 'test'.")
+        
+        print(f"✅ Loaded {mode} split: {len(self.current_data)} samples")
+
+    def __len__(self):
+        return len(self.current_data)
+    
+    def __getitem__(self, idx):
+        sample = self.current_data[idx]
+
+
+        # Load image
+        img_path = sample["jpg_path"]
+        image = image = Image.open(img_path).convert("L")
+        image = self.transform(image)
+
+        txt_path = sample["txt_path"]
+        try:
+            with open(txt_path, "r") as f:
+                text_report = f.read()
+        except FileNotFoundError:
+            print(f"File not found: {txt_path}")
+            text_report = ""
+
+        label = torch.tensor(sample.get("pneumonia_label", 3), dtype=torch.long)
+
+        return image, text_report, label
+    
+def get_dataloader(mode: str = "train",
+                   batch_size: int = 32, 
+                   shuffle: bool = True,
+                   num_samples: int = None,
+                   transform=None):
+    dataset = ChestXrayDataset(mode=mode, 
+                               num_samples=num_samples, 
+                               transform=transform)
+    return DataLoader(dataset,
+                      batch_size=batch_size,
+                      shuffle=shuffle)
+
+def main():
+    parser = argparse.ArgumentParser(description="Chest X-ray Dataset Loader")
+    parser.add_argument("--mode", type=str, default="train", choices=["train", "val", "test"], help="Mode of the dataset")
+    parser.add_argument("--batch_size", type=int, default=32, help="Batch size for DataLoader")
+    parser.add_argument("--num_samples", type=int, default=None, help="Number of samples to load from the dataset")
+    parser.add_argument("--shuffle", type=bool, default=True, help="Shuffle the dataset")
+    parser.add_argument("--transform", type=str, default=None, help="Transformations to apply to the images")
+    args = parser.parse_args()
+
+    transform = None
+
+    dataloader = get_dataloader(
+        mode=args.mode,
+        batch_size=args.batch_size,
+        shuffle=args.shuffle,
+        transform=transform,
+        num_samples=args.num_samples
+    )
+    # Inspect one batch
+    for images, reports, labels in dataloader:
+        print(f"Batch → Images: {images.shape}, Reports: {len(reports)}, Labels: {labels.shape}")
+        break
+    
+
+if __name__ == "__main__":
+    main()
+      
+-----
+model.py
+-----
+# model.py
+import torch
+import torch.nn as nn
+import torchvision.models as models
+from transformers import AutoModelForCausalLM, GPT2LMHeadModel, GPT2Config
+
+# ---------------- Encoder Options ----------------
+
+class ResNet50Backbone(nn.Module):
+    def __init__(self, pretrained=True):
+        super().__init__()
+        resnet50 = models.resnet50(weights=models.ResNet50_Weights.DEFAULT if pretrained else None)
+        self.conv1 = nn.Conv2d(1, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        self.conv1.weight = nn.Parameter(torch.mean(resnet50.conv1.weight, dim=1, keepdim=True))
+        self.feature_extractor = nn.Sequential(*list(resnet50.children())[1:-2])
+        self.flatten = nn.AdaptiveAvgPool2d((1, 1))
+
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.feature_extractor(x)
+        x = self.flatten(x)
+        return torch.flatten(x, 1)
+
+class DenseNet121Backbone(nn.Module):
+    def __init__(self, pretrained=True):
+        super().__init__()
+        import torchxrayvision as xrv
+        self.model = xrv.models.DenseNet(weights="all" if pretrained else None)
+        self.model.op_threshs = None  # Turn off built-in thresholds
+
+    def forward(self, x):
+        features = self.model.features(x)
+        features = torch.nn.functional.relu(features, inplace=True)
+        features = torch.nn.functional.adaptive_avg_pool2d(features, (1, 1))
+        return features.view(features.size(0), -1)
+
+class ScratchCNN(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool2d((1,1))
+        )
+    
+    def forward(self, x):
+        x = self.conv(x)
+        return torch.flatten(x, 1)
+
+# ---------------- Decoder Options ----------------
+
+class ScratchTransformer(nn.Module):
+    def __init__(self, vocab_size, hidden_dim=256, num_layers=2, num_heads=4):
+        super().__init__()
+        encoder_layer = nn.TransformerEncoderLayer(d_model=hidden_dim, nhead=num_heads)
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.embedding = nn.Embedding(vocab_size, hidden_dim)
+        self.fc_out = nn.Linear(hidden_dim, vocab_size)
+
+    def forward(self, input_ids, encoder_hidden_states=None):
+        x = self.embedding(input_ids)
+        if encoder_hidden_states is not None:
+            x = x + encoder_hidden_states.unsqueeze(1)  # add features as bias
+        x = self.transformer(x)
+        logits = self.fc_out(x)
+        return logits
+
+# ---------------- Full Model ----------------
+
+class RadTexModel(nn.Module):
+    def __init__(self, encoder_name, decoder_name, vocab_size, num_classes=4, pretrained_backbone=True):
+        super().__init__()
+
+        # Select Encoder
+        if encoder_name == "resnet":
+            self.visual_backbone = ResNet50Backbone(pretrained=pretrained_backbone)
+            visual_feature_dim = 2048
+        elif encoder_name == "densenet":
+            self.visual_backbone = DenseNet121Backbone(pretrained=pretrained_backbone)
+            visual_feature_dim = 1024
+        elif encoder_name == "scratch_encoder":
+            self.visual_backbone = ScratchCNN()
+            visual_feature_dim = 64
+        else:
+            raise ValueError(f"Unknown encoder: {encoder_name}")
+
+        # Select Decoder
+        if decoder_name == "gpt2":
+            config = GPT2Config.from_pretrained("gpt2")
+            config.add_cross_attention = True
+            config.vocab_size = vocab_size
+            config.pad_token_id = config.eos_token_id
+            config.bos_token_id = config.bos_token_id or config.eos_token_id
+            self.text_decoder = GPT2LMHeadModel(config)
+            self.text_decoder.resize_token_embeddings(vocab_size)
+        elif decoder_name == "biogpt":
+            self.text_decoder = AutoModelForCausalLM.from_pretrained("microsoft/BioGPT-Large")
+            self.text_decoder.resize_token_embeddings(vocab_size)
+        elif decoder_name == "scratch_decoder":
+            self.text_decoder = ScratchTransformer(vocab_size)
+        else:
+            raise ValueError(f"Unknown decoder: {decoder_name}")
+
+        self.feature_projection = nn.Linear(visual_feature_dim, 768)
+        self.classifier = nn.Sequential(
+            nn.Linear(visual_feature_dim, 512),
+            nn.ReLU(),
+            nn.Linear(512, num_classes),
+            nn.Sigmoid()
+        )
+
+    def forward(self, images, text_inputs=None, generate=False, generation_args=None):
+        visual_features = self.visual_backbone(images)
+        projected_features = self.feature_projection(visual_features)
+        classification_output = self.classifier(visual_features)
+
+        if generate and text_inputs is not None:
+            encoder_hidden_states = projected_features.unsqueeze(1)
+            attention_mask = torch.ones_like(text_inputs)
+
+            if hasattr(self.text_decoder, 'generate'):  # GPT models
+                generated_ids = self.text_decoder.generate(
+                    input_ids=text_inputs,
+                    encoder_hidden_states=encoder_hidden_states,
+                    attention_mask=attention_mask,
+                    max_length=generation_args.get('max_length', 128),
+                    repetition_penalty=generation_args.get('repetition_penalty', 1.2),
+                    top_k=generation_args.get('top_k', 50),
+                    top_p=generation_args.get('top_p', 0.95),
+                    do_sample=True
+                )
+            else:  # scratch decoder
+                generated_ids = None  # Scratch decoder does not implement `.generate()`
+
+            return classification_output, generated_ids
+
+        elif text_inputs is not None:
+            seq_len = text_inputs.shape[1]
+            repeated_features = projected_features.unsqueeze(1).repeat(1, seq_len, 1)
+
+            if hasattr(self.text_decoder, 'forward'):
+                logits = self.text_decoder(
+                    input_ids=text_inputs,
+                    encoder_hidden_states=repeated_features
+                ).logits
+            else:
+                logits = self.text_decoder(text_inputs, encoder_hidden_states=repeated_features)
+
+            return classification_output, logits
+
+        return classification_output, None
+
+    def freeze_encoder(self):
+        for param in self.visual_backbone.parameters():
+            param.requires_grad = False
+
+    def unfreeze_encoder(self):
+        for param in self.visual_backbone.parameters():
+            param.requires_grad = True
+
+# ✅ Helper for pipeline use
+def build_model(encoder_name, decoder_name, vocab_size, pretrained_backbone=True):
+    return RadTexModel(encoder_name=encoder_name, decoder_name=decoder_name, vocab_size=vocab_size, pretrained_backbone=pretrained_backbone)
+
+-----
+train.py
+-----
+# train.py
+import torch
+import torch.nn as nn
+from transformers import AutoTokenizer
+from torch.optim import Adam
+from tqdm import tqdm
+
+from data import get_dataloader
+from model import RadTexModel
+def get_tokenizer():
+    tokenizer = AutoTokenizer.from_pretrained("allenai/scibert_scivocab_uncased")
+    tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
+    tokenizer.padding_side = "left"
+    return tokenizer
+
+def train(model, train_loader, val_loader, tokenizer, epochs=1, lr=2e-5, save_path="radtex_model.pth", device="cuda", 
+          only_classification=False, only_text_generation=False, generation_args=None):
+    model = model.to(device)
+    vocab_size = tokenizer.vocab_size
+
+    classification_criterion = nn.CrossEntropyLoss()
+    generation_criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
+    optimizer = Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=lr, weight_decay=1e-5)
+
+    for epoch in range(epochs):
+        print(f"\n🔥 Epoch {epoch+1}/{epochs}")
+        model.train()
+        total_class_loss, total_text_loss = 0.0, 0.0
+
+        for images, reports, labels in tqdm(train_loader):
+            images = images.to(device)
+            labels = labels.to(device).long()
+
+            tokenized = tokenizer(reports, padding=True, truncation=True, max_length=128, return_tensors="pt")
+            text_inputs = tokenized["input_ids"].to(device)
+
+            optimizer.zero_grad()
+
+            # Forward pass
+            class_output, text_output = model(
+                images,
+                text_inputs=text_inputs,
+                generate=False,
+                generation_args=generation_args or {}
+            )
+
+            total_loss = 0.0
+
+            if not only_text_generation:
+                class_loss = classification_criterion(class_output, labels)
+                total_loss += class_loss
+                total_class_loss += class_loss.item()
+
+            if not only_classification and text_output is not None:
+                text_loss = generation_criterion(text_output.view(-1, vocab_size), text_inputs.view(-1))
+                total_loss += text_loss
+                total_text_loss += text_loss.item()
+
+            total_loss.backward()
+            optimizer.step()
+
+        print(f"🧪 Epoch [{epoch+1}/{epochs}] | Class Loss: {total_class_loss / len(train_loader):.4f}, Text Loss: {total_text_loss / len(train_loader):.4f}")
+
+        validate(model, val_loader, tokenizer, vocab_size, classification_criterion, generation_criterion, device, only_classification, only_text_generation)
+
+    torch.save(model.state_dict(), save_path)
+    print(f"✅ Model saved at {save_path}")
+
+def validate(model, val_loader, tokenizer, vocab_size, classification_criterion, generation_criterion, device, only_classification=False, only_text_generation=False):
+    model.eval()
+    correct, total = 0, 0
+    total_class_loss, total_text_loss = 0.0, 0.0
+
+    with torch.no_grad():
+        for images, reports, labels in val_loader:
+            images = images.to(device)
+            labels = labels.to(device).long()
+
+            tokenized = tokenizer(reports, padding=True, truncation=True, max_length=128, return_tensors="pt")
+            text_inputs = tokenized["input_ids"].to(device)
+
+            class_output, text_output = model(
+                images,
+                text_inputs=text_inputs,
+                generate=False
+            )
+
+            if not only_text_generation:
+                class_loss = classification_criterion(class_output, labels)
+                total_class_loss += class_loss.item()
+
+            if not only_classification and text_output is not None:
+                text_loss = generation_criterion(text_output.view(-1, vocab_size), text_inputs.view(-1))
+                total_text_loss += text_loss.item()
+
+            predicted = class_output.argmax(dim=1)
+            correct += (predicted == labels).sum().item()
+            total += labels.size(0)
+
+    acc = 100 * correct / total
+    print(f"🔍 Validation — Class Loss: {total_class_loss / len(val_loader):.4f}, Text Loss: {total_text_loss / len(val_loader):.4f}, Accuracy: {acc:.2f}%")
+
+-----
+evaluate.py
+-----
+import torch
+import torch
+from sklearn.metrics import accuracy_score
+
+import nltk
+nltk.data.path.append("/work3/s224228/nltk_data")
+nltk.download('wordnet', download_dir='/work3/s224228/nltk_data')
+
+from data import get_dataloader
+from model import RadTexModel
+from transformers import AutoTokenizer
+from nltk.translate.meteor_score import meteor_score
+from rouge_score import rouge_scorer
+from tqdm import tqdm
+
+def evaluate(model_path="radtex_model_epoch1.pth", batch_size=8, device="cuda"):
+    tokenizer = AutoTokenizer.from_pretrained("allenai/scibert_scivocab_uncased")
+    tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "left"
+
+    device = torch.device(device if torch.cuda.is_available() else "cpu")
+    vocab_size = tokenizer.vocab_size
+
+    # Load model
+    model = RadTexModel(vocab_size=vocab_size, num_classes=4).to(device)
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.eval()
+
+    test_loader = get_dataloader(mode="test", batch_size=batch_size, shuffle=False)
+
+    prompt = "FINAL REPORT\n\n"
+    prompt_inputs = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
+
+    all_preds, all_labels = [], []
+    all_generated_texts, all_reference_texts = [], []
+
+    print("\n📋 Generating Reports from Images...\n")
+    with torch.no_grad():
+        for images, reports, labels in tqdm(test_loader):
+            images = images.to(device)
+            labels = labels.to(device).long()
+
+            class_output, generated_ids = model(
+                images,
+                text_inputs=prompt_inputs.repeat(images.size(0), 1),
+                generate=True,
+                max_length=128
+            )
+
+            predicted_labels = class_output.argmax(dim=1).cpu().numpy()
+            all_preds.extend(predicted_labels)
+            all_labels.extend(labels.cpu().numpy())
+
+            generated_texts = [tokenizer.decode(ids, skip_special_tokens=True) for ids in generated_ids]
+            all_generated_texts.extend(generated_texts)
+            all_reference_texts.extend(reports)
+
+            for i, text in enumerate(generated_texts[:5]):
+                print(f"\nGenerated Report {i+1}:\n{text}\n----\nOriginal:\n{reports[i]}\n")
+
+    # Classification Metrics
+    accuracy = accuracy_score(all_labels, all_preds)
+
+    # Text Metrics
+    rouge = rouge_scorer.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=True)
+    rouge_scores = [rouge.score(ref, gen) for ref, gen in zip(all_reference_texts, all_generated_texts)]
+    avg_rouge = {k: sum(d[k].fmeasure for d in rouge_scores) / len(rouge_scores) for k in rouge_scores[0]}
+
+    meteor_scores = [
+        meteor_score([ref.split()], gen.split()) for ref, gen in zip(all_reference_texts, all_generated_texts)
+    ]
+    avg_meteor = sum(meteor_scores) / len(meteor_scores)
+
+    print("\n✅ **Evaluation Results:**")
+    print(f"🔹 Accuracy: {accuracy:.4f}")
+    print(f"🔹 ROUGE: {avg_rouge}")
+    print(f"🔹 METEOR: {avg_meteor:.4f}")
+
+if __name__ == "__main__":
+    evaluate()
+
+-----
+visualize.py
+-----
+import torch
+import matplotlib.pyplot as plt
+from torchvision.utils import make_grid
+from data import get_dataloader
+from model import RadTexModel
+from transformers import AutoTokenizer
+
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def visualize_predictions(model_path="radtex_model.pth", batch_size=8):
+    tokenizer = AutoTokenizer.from_pretrained("allenai/scibert_scivocab_uncased")
+    tokenizer.pad_token = tokenizer.eos_token
+
+    model = RadTexModel(vocab_size=tokenizer.vocab_size, num_classes=4).to(DEVICE)
+    model.load_state_dict(torch.load(model_path, map_location=DEVICE))
+    model.eval()
+
+    test_loader = get_dataloader(mode="test", batch_size=batch_size, shuffle=False)
+    images, reports, labels = next(iter(test_loader))
+
+    images = images.to(DEVICE)
+    labels = labels.to(DEVICE).long()
+
+    prompt = "FINAL REPORT\n\n"
+    prompt_inputs = tokenizer(prompt, return_tensors="pt").input_ids.to(DEVICE)
+    text_inputs = prompt_inputs.repeat(images.size(0), 1)
+
+    with torch.no_grad():
+        class_output, generated_ids = model(images, text_inputs=text_inputs, generate=True, max_length=128)
+
+    predicted_labels = class_output.argmax(dim=1).cpu().numpy()
+    generated_texts = [tokenizer.decode(ids, skip_special_tokens=True) for ids in generated_ids]
+
+    fig, axes = plt.subplots(2, 4, figsize=(15, 8))
+    for i, ax in enumerate(axes.flat):
+        if i >= len(images): break
+        ax.imshow(images[i].cpu().squeeze(), cmap="gray")
+        ax.set_title(f"Pred: {predicted_labels[i]}, True: {labels[i].item()}")
+        ax.set_xlabel(f"Gen: {generated_texts[i][:40]}...\nRef: {reports[i][:40]}...")
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+    plt.tight_layout()
+    plt.show()
+
+if __name__ == "__main__":
+    visualize_predictions()
+
+-----
+run_pipeline.py
+-----
+# --- Imports ---
+import argparse
+import os
+import sys
+import yaml
+import shutil
+import time
+import torch
+import platform
+from pathlib import Path
+from datetime import datetime
+
+from model import build_model
+from data import get_dataloader
+from train import train, get_tokenizer
+from evaluate import evaluate
+from visualize import visualize_predictions
+
+# --- New CLI arguments in parser ---
+parser.add_argument("--encoder", type=str, default="resnet", help="Encoder: resnet, densenet, scratch_encoder")
+parser.add_argument("--decoder", type=str, default="gpt2", help="Decoder: gpt2, biogpt, scratch_decoder")
+parser.add_argument("--training_phases", type=str, default="classification_then_text", choices=["classification_only", "classification_then_text", "text_only"], help="Training phases")
+parser.add_argument("--epochs_classification", type=int, default=50, help="Epochs for classification phase")
+parser.add_argument("--epochs_text_generation", type=int, default=50, help="Epochs for text generation phase")
+parser.add_argument("--freeze_encoder", action="store_true", help="Freeze encoder for text generation phase")
+parser.add_argument("--repetition_penalty", type=float, default=1.2, help="Generation: repetition penalty")
+parser.add_argument("--top_k", type=int, default=50, help="Generation: top-k sampling")
+parser.add_argument("--top_p", type=float, default=0.95, help="Generation: top-p sampling")
+parser.add_argument("--max_length", type=int, default=128, help="Generation: max text length")
+
+# --- After loading args, build output directory etc. ---
+
+# --- Tokenizer and Model ---
+tokenizer = get_tokenizer()
+model = build_model(
+    encoder_name=args.encoder,
+    decoder_name=args.decoder,
+    vocab_size=tokenizer.vocab_size,
+    pretrained_backbone=True
+)
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model = model.to(device)
+
+# --- Dataloaders ---
+train_loader = get_dataloader(mode="train", batch_size=args.batch_size, num_samples=args.num_datapoints)
+val_loader = get_dataloader(mode="val", batch_size=args.batch_size, num_samples=args.num_datapoints)
+test_loader = get_dataloader(mode="test", batch_size=args.batch_size)
+
+# --- Training Phases Logic ---
+if args.training_phases == "classification_only":
+    print("\n🔵 Phase: Classification Only Training")
+    train(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        tokenizer=tokenizer,
+        epochs=args.epochs_classification,
+        lr=args.learning_rate,
+        save_path=str(run_dir / "encoder_only.pth"),
+        device=device,
+        only_classification=True
+    )
+
+elif args.training_phases == "classification_then_text":
+    print("\n🔵 Phase 1: Classification Training")
+    train(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        tokenizer=tokenizer,
+        epochs=args.epochs_classification,
+        lr=args.learning_rate,
+        save_path=str(run_dir / "encoder_only.pth"),
+        device=device,
+        only_classification=True
+    )
+    print("\n🟠 Phase 2: Text Generation Training")
+    model.freeze_encoder()  # 🔥 freeze encoder
+    train(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        tokenizer=tokenizer,
+        epochs=args.epochs_text_generation,
+        lr=args.learning_rate,
+        save_path=str(run_dir / "full_model.pth"),
+        device=device,
+        only_text_generation=True,
+        generation_args={
+            "repetition_penalty": args.repetition_penalty,
+            "top_k": args.top_k,
+            "top_p": args.top_p,
+            "max_length": args.max_length
+        }
+    )
+
+elif args.training_phases == "text_only":
+    print("\n🟠 Phase: Text Generation Only (Freeze Encoder)")
+    model.freeze_encoder()
+    train(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        tokenizer=tokenizer,
+        epochs=args.epochs_text_generation,
+        lr=args.learning_rate,
+        save_path=str(run_dir / "full_model.pth"),
+        device=device,
+        only_text_generation=True,
+        generation_args={
+            "repetition_penalty": args.repetition_penalty,
+            "top_k": args.top_k,
+            "top_p": args.top_p,
+            "max_length": args.max_length
+        }
+    )
+
+# --- Evaluate and Visualize ---
+evaluate(model_path=str(run_dir / "full_model.pth"), batch_size=args.batch_size, device=device)
+visualize_predictions(model_path=str(run_dir / "full_model.pth"), batch_size=args.batch_size)
+
+# --- Save runtime ---
+total_time = time.time() - start_time
+with open(run_dir / "runtime.txt", "w") as f:
+    f.write(f"Total time (s): {total_time:.2f}\n")
+
+-----
+run_hpc.sh
+-----
+#!/bin/sh
+### General options
+#BSUB -q gpua100
+#BSUB -J chestxray_pipeline
+#BSUB -o chestxray_pipeline_%J.out
+#BSUB -e chestxray_pipeline_%J.err
+#BSUB -n 4
+#BSUB -gpu "num=1:mode=exclusive_process"
+#BSUB -W 72:00
+#BSUB -R "rusage[mem=16GB]"
+#BSUB -M 16GB
+#BSUB -u s224228@dtu.dk
+#BSUB -B
+#BSUB -N
+
+# ✅ Activate your virtual environment
+source /zhome/44/7/187366/Bachelor_project/bachelor/bin/activate
+
+# ✅ Set CUDA device manually (optional but clean)
+export CUDA_VISIBLE_DEVICES=0
+
+# ✅ Run the full pipeline
+python hpc/run_pipeline.py \
+    --name dense_biogpt_full \
+    --encoder densenet \
+    --decoder biogpt \
+    --training_phases classification_then_text \
+    --epochs_classification 50 \
+    --epochs_text_generation 50 \
+    --batch_size 32 \
+    --learning_rate 2e-5 \
+    --num_datapoints 50000 \
+    --save_path /work3/s224228/bachelor_runs \
+    --repetition_penalty 1.4 \
+    --top_p 0.92 \
+    --top_k 40
+
+
+-----

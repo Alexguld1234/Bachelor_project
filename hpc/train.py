@@ -1,3 +1,4 @@
+# train.py
 import torch
 import torch.nn as nn
 from transformers import AutoTokenizer
@@ -6,20 +7,20 @@ from tqdm import tqdm
 
 from data import get_dataloader
 from model import RadTexModel
-
 def get_tokenizer():
     tokenizer = AutoTokenizer.from_pretrained("allenai/scibert_scivocab_uncased")
     tokenizer.pad_token = tokenizer.eos_token if tokenizer.pad_token is None else tokenizer.pad_token
     tokenizer.padding_side = "left"
     return tokenizer
 
-def train(model, train_loader, val_loader, tokenizer, epochs=1, lr=2e-5, save_path="radtex_model.pth", device="cuda"):
+def train(model, train_loader, val_loader, tokenizer, epochs=1, lr=2e-5, save_path="radtex_model.pth", device="cuda", 
+          only_classification=False, only_text_generation=False, generation_args=None):
     model = model.to(device)
     vocab_size = tokenizer.vocab_size
 
     classification_criterion = nn.CrossEntropyLoss()
     generation_criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
-    optimizer = Adam(model.parameters(), lr=lr, weight_decay=1e-5)
+    optimizer = Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=lr, weight_decay=1e-5)
 
     for epoch in range(epochs):
         print(f"\n🔥 Epoch {epoch+1}/{epochs}")
@@ -34,25 +35,38 @@ def train(model, train_loader, val_loader, tokenizer, epochs=1, lr=2e-5, save_pa
             text_inputs = tokenized["input_ids"].to(device)
 
             optimizer.zero_grad()
-            class_output, text_output = model(images, text_inputs=text_inputs)
 
-            class_loss = classification_criterion(class_output, labels)
-            text_loss = generation_criterion(text_output.view(-1, vocab_size), text_inputs.view(-1))
-            total_loss = class_loss + text_loss
+            # Forward pass
+            class_output, text_output = model(
+                images,
+                text_inputs=text_inputs,
+                generate=False,
+                generation_args=generation_args or {}
+            )
+
+            total_loss = 0.0
+
+            if not only_text_generation:
+                class_loss = classification_criterion(class_output, labels)
+                total_loss += class_loss
+                total_class_loss += class_loss.item()
+
+            if not only_classification and text_output is not None:
+                text_loss = generation_criterion(text_output.view(-1, vocab_size), text_inputs.view(-1))
+                total_loss += text_loss
+                total_text_loss += text_loss.item()
 
             total_loss.backward()
             optimizer.step()
 
-            total_class_loss += class_loss.item()
-            total_text_loss += text_loss.item()
-
         print(f"🧪 Epoch [{epoch+1}/{epochs}] | Class Loss: {total_class_loss / len(train_loader):.4f}, Text Loss: {total_text_loss / len(train_loader):.4f}")
-        validate(model, val_loader, tokenizer, vocab_size, classification_criterion, generation_criterion, device)
+
+        validate(model, val_loader, tokenizer, vocab_size, classification_criterion, generation_criterion, device, only_classification, only_text_generation)
 
     torch.save(model.state_dict(), save_path)
     print(f"✅ Model saved at {save_path}")
 
-def validate(model, val_loader, tokenizer, vocab_size, classification_criterion, generation_criterion, device):
+def validate(model, val_loader, tokenizer, vocab_size, classification_criterion, generation_criterion, device, only_classification=False, only_text_generation=False):
     model.eval()
     correct, total = 0, 0
     total_class_loss, total_text_loss = 0.0, 0.0
@@ -65,13 +79,19 @@ def validate(model, val_loader, tokenizer, vocab_size, classification_criterion,
             tokenized = tokenizer(reports, padding=True, truncation=True, max_length=128, return_tensors="pt")
             text_inputs = tokenized["input_ids"].to(device)
 
-            class_output, text_output = model(images, text_inputs=text_inputs)
+            class_output, text_output = model(
+                images,
+                text_inputs=text_inputs,
+                generate=False
+            )
 
-            class_loss = classification_criterion(class_output, labels)
-            text_loss = generation_criterion(text_output.view(-1, vocab_size), text_inputs.view(-1))
+            if not only_text_generation:
+                class_loss = classification_criterion(class_output, labels)
+                total_class_loss += class_loss.item()
 
-            total_class_loss += class_loss.item()
-            total_text_loss += text_loss.item()
+            if not only_classification and text_output is not None:
+                text_loss = generation_criterion(text_output.view(-1, vocab_size), text_inputs.view(-1))
+                total_text_loss += text_loss.item()
 
             predicted = class_output.argmax(dim=1)
             correct += (predicted == labels).sum().item()
@@ -79,13 +99,3 @@ def validate(model, val_loader, tokenizer, vocab_size, classification_criterion,
 
     acc = 100 * correct / total
     print(f"🔍 Validation — Class Loss: {total_class_loss / len(val_loader):.4f}, Text Loss: {total_text_loss / len(val_loader):.4f}, Accuracy: {acc:.2f}%")
-
-if __name__ == "__main__":
-    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-    tokenizer = get_tokenizer()
-
-    train_loader = get_dataloader(mode="train", batch_size=16)
-    val_loader = get_dataloader(mode="val", batch_size=16)
-
-    model = RadTexModel(vocab_size=tokenizer.vocab_size, num_classes=4)
-    train(model, train_loader, val_loader, tokenizer, epochs=1, device=DEVICE)

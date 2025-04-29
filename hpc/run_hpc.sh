@@ -20,10 +20,15 @@ source /zhome/44/7/187366/Bachelor_project/bachelor/bin/activate
 export CUDA_VISIBLE_DEVICES=0
 
 # ✅ Run the full pipeline
+
 python hpc/run_pipeline.py \
-    --name chestxray_experiment \
-    --epochs 1 \
-    --batch_size 5 \
-    --learning_rate 2e-2 \
-    --num_datapoints 20 \
-    --save_path /work3/s224228/bachelor_runs
+  --name dense_biogpt_full_epoch2_2lr3e-5_10 \
+  --encoder densenet \
+  --decoder biogpt \
+  --training_phases classification_then_text \
+  --epochs_classification 2 \
+  --epochs_text_generation 2 \
+  --batch_size 16 \
+  --learning_rate 3e-5 \
+  --num_datapoints 10 \
+  --repetition_penalty 1.3 --top_k 40 --top_p 0.9

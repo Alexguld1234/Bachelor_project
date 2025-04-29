@@ -19,7 +19,7 @@ class ResNet50Backbone(nn.Module):
         return torch.flatten(x, 1)
 
 class RadTexModel(nn.Module):
-    def __init__(self, vocab_size, num_classes=1, pretrained_backbone=True):
+    def __init__(self, vocab_size, num_classes=4, pretrained_backbone=True):
         super().__init__()
         self.visual_backbone = ResNet50Backbone(pretrained=pretrained_backbone)
         self.feature_projection = nn.Linear(2048, 768)
@@ -40,7 +40,7 @@ class RadTexModel(nn.Module):
             nn.Sigmoid()
         )
 
-    def forward(self, images, text_inputs=None, generate=False, max_length=50):
+    def forward(self, images, text_inputs=None, generate=False, max_length=500):
         visual_features = self.visual_backbone(images)
         projected_features = self.feature_projection(visual_features)
         classification_output = self.classifier(visual_features)
@@ -74,3 +74,7 @@ class RadTexModel(nn.Module):
             return classification_output, logits
 
         return classification_output, None
+
+# ✅ Helper for pipeline use
+def build_model(vocab_size: int, pretrained_backbone=True):
+    return RadTexModel(vocab_size=vocab_size, pretrained_backbone=pretrained_backbone)

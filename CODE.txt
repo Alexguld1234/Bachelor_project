@@ -1,5 +1,3 @@
-I'm working on my bachelor project where we train a deep learning model on chest X-rays to generate both a free-text radiology report and a label. The codebase consists of five main files:
-
 data.py
 -----
 import argparse
@@ -9,11 +7,12 @@ import pandas as pd
 import numpy as np
 import random
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageFile
 import torchvision.transforms as transforms
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 
-CSV_FILE = "HPC_AP_url_label_50000.csv"
+CSV_FILE = "/zhome/44/7/187366/Bachelor_project/Bachelor_project/hpc/HPC_AP_url_label_50000.csv"
 
 
 
@@ -221,12 +220,12 @@ def build_model(vocab_size: int, pretrained_backbone=True):
     return RadTexModel(vocab_size=vocab_size, pretrained_backbone=pretrained_backbone)
 
 -----
-
 train.py
 -----
 import torch
 import torch.nn as nn
-from transformers import AdamW, AutoTokenizer
+from transformers import AutoTokenizer
+from torch.optim import Adam
 from tqdm import tqdm
 
 from data import get_dataloader
@@ -244,7 +243,7 @@ def train(model, train_loader, val_loader, tokenizer, epochs=1, lr=2e-5, save_pa
 
     classification_criterion = nn.CrossEntropyLoss()
     generation_criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
-    optimizer = AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
+    optimizer = Adam(model.parameters(), lr=lr, weight_decay=1e-5)
 
     for epoch in range(epochs):
         print(f"\n🔥 Epoch {epoch+1}/{epochs}")
@@ -316,11 +315,16 @@ if __name__ == "__main__":
     train(model, train_loader, val_loader, tokenizer, epochs=1, device=DEVICE)
 
 -----
-
 evaluate.py
 -----
 import torch
+import torch
 from sklearn.metrics import accuracy_score
+
+import nltk
+nltk.data.path.append("/work3/s224228/nltk_data")
+nltk.download('wordnet', download_dir='/work3/s224228/nltk_data')
+
 from data import get_dataloader
 from model import RadTexModel
 from transformers import AutoTokenizer
@@ -395,7 +399,6 @@ if __name__ == "__main__":
     evaluate()
 
 -----
-
 visualize.py
 -----
 import torch
@@ -446,13 +449,9 @@ def visualize_predictions(model_path="radtex_model.pth", batch_size=8):
 if __name__ == "__main__":
     visualize_predictions()
 
-------
-
-We're running everything on an HPC cluster
-And so i have created a sixth file called "run_pipeline.py"
-This script should serve as the main entry point for the project and support a command-line interface (CLI) for all the important parameters used across the other five files.
 -----
-
+run_pipeline.py
+-----
 import argparse
 import os
 import sys
@@ -560,10 +559,8 @@ if __name__ == "__main__":
     main()
 
 -----
-
-
-And therefore i have also made a .sh file to run it.
-----
+run_hpc.sh
+-----
 #!/bin/sh
 ### General options
 #BSUB -q gpua100
@@ -587,123 +584,11 @@ export CUDA_VISIBLE_DEVICES=0
 
 # ✅ Run the full pipeline
 python hpc/run_pipeline.py \
-    --name chestxray_experiment \
-    --epochs 1 \
-    --batch_size 5 \
-    --learning_rate 2e-2 \
-    --num_datapoints 20 \
+    --name chestxray_experiment_epoch10lr2e-5_50000_batch64 \
+    --epochs 100\
+    --batch_size 64 \
+    --learning_rate 2e-5 \
+    --num_datapoints 50000 \
     --save_path /work3/s224228/bachelor_runs
 
-----
-
-And just a final note.
-The data loader reads a csv file the PATH
-/zhome/44/7/187366/Bachelor_project/Bachelor_project/data/HPC_AP_url_label_50000.csv
-
-Which has the columns
-subject_id,study_id,dicom_id,urls,txt_urls,Pneumonia,pneumonia_label
-1 example is 
-11941242,50000014,dffc8ab2-ff37704f-2fb29e6d-51e08075-88bca914,/work3/s224228/physionet.org/files/mimic-cxr-jpg/2.1.0/files/p11/p11941242/s50000014/dffc8ab2-ff37704f-2fb29e6d-51e08075-88bca914.jpg,/work3/s224228/physionet.org/files/mimic-cxr/2.1.0/files/p11/p11941242/s50000014.txt,-1.0,2
-
-
-As you can see, the data is stored at /work3/s224228/
-
-I run it on HPC. I get the following error.
-
-Help me fix it by showing which file i should change
-And what i should change
-and into what
-
-Example
-in data.py
-change 
-a=2
-into 
-a=5
-
-
-----
-Traceback (most recent call last):
-  File "/zhome/44/7/187366/Bachelor_project/bachelor/lib/python3.10/site-packages/nltk/corpus/util.py", line 84, in __load
-    root = nltk.data.find(f"{self.subdir}/{zip_name}")
-  File "/zhome/44/7/187366/Bachelor_project/bachelor/lib/python3.10/site-packages/nltk/data.py", line 579, in find
-    raise LookupError(resource_not_found)
-LookupError: 
-**********************************************************************
-  Resource [93mwordnet[0m not found.
-  Please use the NLTK Downloader to obtain the resource:
-
-  [31m>>> import nltk
-  >>> nltk.download('wordnet')
-  [0m
-  For more information see: https://www.nltk.org/data.html
-
-  Attempted to load [93mcorpora/wordnet.zip/wordnet/[0m
-
-  Searched in:
-    - '/zhome/44/7/187366/nltk_data'
-    - '/zhome/44/7/187366/Bachelor_project/bachelor/nltk_data'
-    - '/zhome/44/7/187366/Bachelor_project/bachelor/share/nltk_data'
-    - '/zhome/44/7/187366/Bachelor_project/bachelor/lib/nltk_data'
-    - '/usr/share/nltk_data'
-    - '/usr/local/share/nltk_data'
-    - '/usr/lib/nltk_data'
-    - '/usr/local/lib/nltk_data'
-**********************************************************************
-
-
-During handling of the above exception, another exception occurred:
-
-Traceback (most recent call last):
-  File "/zhome/44/7/187366/Bachelor_project/Bachelor_project/hpc/run_pipeline.py", line 105, in <module>
-    main()
-  File "/zhome/44/7/187366/Bachelor_project/Bachelor_project/hpc/run_pipeline.py", line 89, in main
-    evaluate(model_path=str(checkpoint_path),
-  File "/zhome/44/7/187366/Bachelor_project/Bachelor_project/hpc/evaluate.py", line 63, in evaluate
-    meteor_scores = [
-  File "/zhome/44/7/187366/Bachelor_project/Bachelor_project/hpc/evaluate.py", line 64, in <listcomp>
-    meteor_score([ref.split()], gen.split()) for ref, gen in zip(all_reference_texts, all_generated_texts)
-  File "/zhome/44/7/187366/Bachelor_project/bachelor/lib/python3.10/site-packages/nltk/translate/meteor_score.py", line 397, in meteor_score
-    return max(
-  File "/zhome/44/7/187366/Bachelor_project/bachelor/lib/python3.10/site-packages/nltk/translate/meteor_score.py", line 398, in <genexpr>
-    single_meteor_score(
-  File "/zhome/44/7/187366/Bachelor_project/bachelor/lib/python3.10/site-packages/nltk/translate/meteor_score.py", line 331, in single_meteor_score
-    matches, _, _ = _enum_align_words(
-  File "/zhome/44/7/187366/Bachelor_project/bachelor/lib/python3.10/site-packages/nltk/translate/meteor_score.py", line 223, in _enum_align_words
-    wns_matches, enum_hypothesis_list, enum_reference_list = _enum_wordnetsyn_match(
-  File "/zhome/44/7/187366/Bachelor_project/bachelor/lib/python3.10/site-packages/nltk/translate/meteor_score.py", line 161, in _enum_wordnetsyn_match
-    for synset in wordnet.synsets(enum_hypothesis_list[i][1])
-  File "/zhome/44/7/187366/Bachelor_project/bachelor/lib/python3.10/site-packages/nltk/corpus/util.py", line 120, in __getattr__
-    self.__load()
-  File "/zhome/44/7/187366/Bachelor_project/bachelor/lib/python3.10/site-packages/nltk/corpus/util.py", line 86, in __load
-    raise e
-  File "/zhome/44/7/187366/Bachelor_project/bachelor/lib/python3.10/site-packages/nltk/corpus/util.py", line 81, in __load
-    root = nltk.data.find(f"{self.subdir}/{self.__name}")
-  File "/zhome/44/7/187366/Bachelor_project/bachelor/lib/python3.10/site-packages/nltk/data.py", line 579, in find
-    raise LookupError(resource_not_found)
-LookupError: 
-**********************************************************************
-  Resource [93mwordnet[0m not found.
-  Please use the NLTK Downloader to obtain the resource:
-
-  [31m>>> import nltk
-  >>> nltk.download('wordnet')
-  [0m
-  For more information see: https://www.nltk.org/data.html
-
-  Attempted to load [93mcorpora/wordnet[0m
-
-  Searched in:
-    - '/zhome/44/7/187366/nltk_data'
-    - '/zhome/44/7/187366/Bachelor_project/bachelor/nltk_data'
-    - '/zhome/44/7/187366/Bachelor_project/bachelor/share/nltk_data'
-    - '/zhome/44/7/187366/Bachelor_project/bachelor/lib/nltk_data'
-    - '/usr/share/nltk_data'
-    - '/usr/local/share/nltk_data'
-    - '/usr/lib/nltk_data'
-    - '/usr/local/lib/nltk_data'
-**********************************************************************
-
-
-
-
+-----

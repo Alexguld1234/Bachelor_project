@@ -79,7 +79,7 @@ class ChestXrayDataset(Dataset):
 
         # Load image
         img_path = sample["jpg_path"]
-        image = image = Image.open(img_path).convert("L")
+        image = Image.open(img_path).convert("L")
         image = self.transform(image)
 
         txt_path = sample["txt_path"]

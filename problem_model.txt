@@ -1,0 +1,4 @@
+Our model is really bad, which i think could be because we use pretrained models like resnet and chatgpt2, which isn't necessarily good for medical imaging.
+Is it dumb, that we train on the accuracy and the free-text at the same time or ? 
+So first of, which other pretrained models/way could we structure the code, maybe another llm, maybe another cnn, maybe another tokenizer whatever. 
+Secondly, if we wanted to do it all by scratch, how would we proceed in the best matter? Is it make our own vocabulary and tokenization? BAG of words? 
