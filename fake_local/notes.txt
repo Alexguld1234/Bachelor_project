@@ -1,0 +1,13 @@
+# ✅ Set Project Paths
+PROJECT_ROOT = Path("/work3")
+DATA_DIR    = PROJECT_ROOT / "s224228"
+CSV_FILE    = DATA_DIR / "data" / "HPC_AP_url_label_50000.csv"
+IMG_DIR     = DATA_DIR / "JPG_AP"
+REPORTS_DIR = DATA_DIR / "Reports"
+
+
+
+/zhome/44/7/187366/Bachelor_project/Bachelor_project/data/HPC_AP_url_label_50000.csv
+
+
+data = /work3/s224228/

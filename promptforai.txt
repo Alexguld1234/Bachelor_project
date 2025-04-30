@@ -1,0 +1,91 @@
+🔗 Prompt for the other AI
+Task: Extend my existing run_pipeline.py so it accepts four new runtime flags—--img_size, --num_workers, --pin_memory, and --precision.
+Implement them end-to-end (argparse → dataset → DataLoader → training loop) and add a cross-platform guard that silently falls back to safe defaults when the hardware can’t support a flag.
+
+1 New CLI flags
+
+Flag	Type / Default	Purpose / Notes
+--img_size	int, default 224	Resize each image to (img_size, img_size) inside the dataset transform. Lets me trade accuracy vs. VRAM.
+--num_workers	int, default 4	Passed to every DataLoader. Higher = more parallel disk reads but extra CPU / RAM.
+--pin_memory	store_true flag (default False)	Use pinned host RAM so images.to(device, non_blocking=True) gives faster PCIe copies. Should be ignored if the run is CPU-only.
+--precision	str, default "fp32", choices {"fp32","fp16","bf16"}	Activates PyTorch AMP: fp16 on Volta+, bf16 on Ampere+, fp32 everywhere.
+2 Where to wire them
+Dataset / transform
+
+python
+Kopiér
+Rediger
+transform = transforms.Compose([
+    transforms.Grayscale(1),
+    transforms.Resize((args.img_size, args.img_size)),
+    transforms.ToTensor()
+])
+DataLoader
+
+python
+Kopiér
+Rediger
+train_loader = DataLoader(
+    train_ds, batch_size=args.batch_size, shuffle=True,
+    num_workers=args.num_workers,
+    pin_memory=args.pin_memory,
+    persistent_workers=args.num_workers > 0
+)
+Training loop (mixed precision)
+
+python
+Kopiér
+Rediger
+use_amp = args.precision != "fp32"
+amp_dtype = torch.bfloat16 if args.precision == "bf16" else torch.float16
+scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
+
+with torch.cuda.amp.autocast(enabled=use_amp, dtype=amp_dtype):
+    class_out, text_out = model(...)
+    loss = ...
+scaler.scale(loss).backward()
+scaler.step(optimizer)
+scaler.update()
+3 Cross-platform “sanity shim”
+Put this after args = parser.parse_args() so the script self-corrects when, e.g., it’s run on a CPU-only laptop:
+
+python
+Kopiér
+Rediger
+import torch, platform, multiprocessing as mp
+
+def sanitize_runtime_args(args):
+    # --- GPU / mixed precision ---
+    if not torch.cuda.is_available():
+        if args.precision != "fp32":
+            print("⚠️  No CUDA GPU detected. Falling back to fp32.")
+            args.precision = "fp32"
+        args.pin_memory = False
+
+    # --- cap num_workers ---
+    max_workers = mp.cpu_count()
+    if platform.system() == "Windows":      # spawn is heavier
+        max_workers //= 2
+    if args.num_workers > max_workers:
+        print(f"⚠️  Reducing num_workers from {args.num_workers} to {max_workers}")
+        args.num_workers = max_workers
+
+    return args
+
+args = sanitize_runtime_args(args)
+4 Example launch (GPU box)
+bash
+Kopiér
+Rediger
+python run_pipeline.py \
+  --name resnet_gpt2_fp16 \
+  --encoder resnet --decoder gpt2 \
+  --training_phases classification_then_text \
+  --batch_size 32 --epochs_classification 20 --epochs_text_generation 20 \
+  --img_size 256 --num_workers 8 --pin_memory --precision fp16
+5 Example launch (CPU-only laptop)
+bash
+Kopiér
+Rediger
+python run_pipeline.py --precision fp16 --pin_memory
+# script downgrades to fp32, disables pin-memory, caps num_workers automatically

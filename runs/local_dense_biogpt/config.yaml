@@ -1,0 +1,17 @@
+batch_size: 8
+config: local\config.yaml
+csv_file: D:\Bachelor_project\local\All_AP_pic_w_urls_50000.csv"
+decoder: biogpt
+encoder: densenet
+epochs_classification: 5
+epochs_text_generation: 5
+freeze_encoder: false
+learning_rate: 3.0e-05
+max_length: 128
+name: local_dense_biogpt
+num_datapoints: 5000
+repetition_penalty: 1.3
+save_path: D:\Bachelor_project\runs
+top_k: 40
+top_p: 0.9
+training_phases: classification_then_text

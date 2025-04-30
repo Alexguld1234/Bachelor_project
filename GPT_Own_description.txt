@@ -1,20 +1,14 @@
 I'm working on my bachelor project where we train a deep learning model on chest X-rays images to generate both a free-text radiology report and a label.
 The code base consists of five main files
 data.py, model.py, train.py, evaluate.py and visualize.py
-Because we work on HPC we have also created two additional scripts to work faster which supports command-line interface and config saving. 
-run_pipeline.py and run_hpc.sh
+Because i want to make it work by running only one script and to use command line interface (CLI) we have made a 6. file called
+run_pipeline.py, which main purpose is to call all the functions and have CLI for everything from the main files and specify where to save configs and such.
+Because i also want to be able to run it on HPC, i have also made 
+run_hpc.sh, which is specific to DTU HPC and calls the run_pipeline.py with all the CLI i want.
+I am also thinking about creating
+run_local.sh, which is specific to my local PC, just because its seems easier than always removing the DTU specific code.
 
-The data loader reads a csv file at the path "/zhome/44/7/187366/Bachelor_project/Bachelor_project/hpc/HPC_AP_url_label_50000.csv"
-Which has the columns
-subject_id,study_id,dicom_id,urls,txt_urls,Pneumonia,pneumonia_label
-1 example is 
-11941242,50000014,dffc8ab2-ff37704f-2fb29e6d-51e08075-88bca914,/work3/s224228/physionet.org/files/mimic-cxr-jpg/2.1.0/files/p11/p11941242/s50000014/dffc8ab2-ff37704f-2fb29e6d-51e08075-88bca914.jpg,/work3/s224228/physionet.org/files/mimic-cxr/2.1.0/files/p11/p11941242/s50000014.txt,-1.0,2
-
-The data however is stored at "/work3/s224228/" which is also the place where i save each run of the pipeline.
-
-I prefer only having to run the script "run_hpc.sh" once and then add all the decisions to the command line interface and saving them in the configs
-
-When outputting code you have two options:
-1. outputting the whole code cell, so i can easily copy and paste the whole file
-2. If its small changes i want you to tell which file to change, what lines and into what.
-ex: in data.py change "a=2, b=5, c=a+d" into "a=2, b=5, c=a+b"
+The files are loaded from a csv called "Final_AP_url_label_50000.csv", which is located in the same folder as the rest of the files. An example is 
+subject_id,study_id,dicom_id,local_urls,local_txt_urls,hpc_urls,hpc_txt_urls,Pneumonia,pneumonia_label
+11941242,50000014,dffc8ab2-ff37704f-2fb29e6d-51e08075-88bca914,D:\physionet.org/files/mimic-cxr-jpg/2.1.0/files/p11/p11941242/s50000014/dffc8ab2-ff37704f-2fb29e6d-51e08075-88bca914.jpg,D:\physionet.org/files/mimic-cxr/2.1.0/files/p11/p11941242/s50000014.txt,/work3/s224228/physionet.org/files/mimic-cxr-jpg/2.1.0/files/p11/p11941242/s50000014/dffc8ab2-ff37704f-2fb29e6d-51e08075-88bca914.jpg,/work3/s224228/physionet.org/files/mimic-cxr/2.1.0/files/p11/p11941242/s50000014.txt,-1.0,2
+15752761,50000052,a09e5a6c-9635efa7-de26c04a-28104ce9-e5f798d6,D:\physionet.org/files/mimic-cxr-jpg/2.1.0/files/p15/p15752761/s50000052/a09e5a6c-9635efa7-de26c04a-28104ce9-e5f798d6.jpg,D:\physionet.org/files/mimic-cxr/2.1.0/files/p15/p15752761/s50000052.txt,/work3/s224228/physionet.org/files/mimic-cxr-jpg/2.1.0/files/p15/p15752761/s50000052/a09e5a6c-9635efa7-de26c04a-28104ce9-e5f798d6.jpg,/work3/s224228/physionet.org/files/mimic-cxr/2.1.0/files/p15/p15752761/s50000052.txt,,3

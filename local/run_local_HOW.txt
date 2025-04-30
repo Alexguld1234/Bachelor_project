@@ -1,0 +1,4 @@
+Open powershell and copy paste the following into it and run it
+
+
+python run_pipeline.py --name local_resnet_gpt2_test --setup local --encoder resnet --decoder gpt2 --training_phases classification_then_text --epochs_classification 2 --epochs_text_generation 2 --batch_size 8 --learning_rate 3e-5 --num_datapoints 10 --img_size 224 --save_path bachelor_runs --repetition_penalty 1.2 --top_k 50 --top_p 0.95
