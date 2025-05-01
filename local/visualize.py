@@ -15,7 +15,7 @@ def visualize_predictions(model_path,
                           decoder="biogpt",
                           prompt="FINAL REPORT\n\n",
                           setup="local",
-                          csv_file="Final_AP_url_label_50000.csv",
+                          csv_file="local/Final_AP_url_label_50000.csv",
                           num_datapoints=None,
                           img_size=(224, 224)):
 
@@ -96,7 +96,7 @@ if __name__ == "__main__":
     parser.add_argument("--decoder", type=str, default="biogpt")
     parser.add_argument("--prompt", type=str, default="FINAL REPORT\n\n")
     parser.add_argument("--setup", choices=["local", "hpc"], default="local")
-    parser.add_argument("--csv_file", type=str, default="Final_AP_url_label_50000.csv")
+    parser.add_argument("--csv_file", type=str, default="local/Final_AP_url_label_50000.csv")
     parser.add_argument("--num_datapoints", type=int, default=None)
     parser.add_argument("--img_size", type=int, default=224)
 

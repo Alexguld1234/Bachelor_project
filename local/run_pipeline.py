@@ -26,7 +26,7 @@ parser.add_argument("--setup", type=str, choices=["local", "hpc"], default="loca
 parser.add_argument("--config", type=Path, default=None, help="YAML config to load (overridden by later CLI flags)")
 
 # • data
-parser.add_argument("--csv_file", type=Path, default=Path("Final_AP_url_label_50000.csv"))
+parser.add_argument("--csv_file", type=Path, default=Path("local/Final_AP_url_label_50000.csv"))
 parser.add_argument("--batch_size", type=int, default=32)
 parser.add_argument("--num_datapoints", type=int, default=None)
 parser.add_argument("--img_size", type=int, default=224, help="Resize images to (img_size, img_size)")

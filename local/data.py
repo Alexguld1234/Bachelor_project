@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader, Dataset, random_split
 
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
-csv_file="Final_AP_url_label_50000.csv"
+csv_file="local/Final_AP_url_label_50000.csv"
 
 
 def set_seed(seed: int = 42) -> None:
@@ -29,7 +29,7 @@ class ChestXrayDataset(Dataset):
                 setup: str = "local",
                 img_size: tuple = (224, 224),
                 num_samples: int = None,
-                csv_file: Path = Path("Final_AP_url_label_50000.csv")):   # NEW):
+                csv_file: Path = Path("local/Final_AP_url_label_50000.csv")):   # NEW):
         set_seed(42)
         self.data = pd.read_csv(csv_file)
 
@@ -100,7 +100,7 @@ def get_dataloader(mode: str = "train",
                    num_samples: int = None,
                    img_size: tuple = (224, 224),
                    setup: str = "local",                                 # NEW
-                   csv_file: Path = Path("Final_AP_url_label_50000.csv") # NEW
+                   csv_file: Path = Path("local/Final_AP_url_label_50000.csv") # NEW
                    ):
     dataset = ChestXrayDataset(mode=mode,
                                num_samples=num_samples,
@@ -120,7 +120,7 @@ def main():
     parser.set_defaults(shuffle=True)
 
     parser.add_argument("--setup", choices=["local", "hpc"], default="local")
-    parser.add_argument("--csv_file", type=str, default="Final_AP_url_label_50000.csv")
+    parser.add_argument("--csv_file", type=str, default="local/Final_AP_url_label_50000.csv")
     parser.add_argument("--img_size", type=int, default=224, help="Square side length")
     args = parser.parse_args()
 

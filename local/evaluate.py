@@ -15,7 +15,7 @@ from nltk.translate.meteor_score import meteor_score
 from rouge_score import rouge_scorer
 from tqdm import tqdm
 from radtex_model import build_model
-def evaluate(model_path, batch_size, device, encoder, decoder, setup="local", csv_file="Final_AP_url_label_50000.csv", prompt="FINAL REPORT\n\n", num_datapoints=None, img_size=(224, 224)):
+def evaluate(model_path, batch_size, device, encoder, decoder, setup="local", csv_file="local/Final_AP_url_label_50000.csv", prompt="FINAL REPORT\n\n", num_datapoints=None, img_size=(224, 224)):
     tokenizer = AutoTokenizer.from_pretrained("allenai/scibert_scivocab_uncased")
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "left"
@@ -104,7 +104,7 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--setup", type=str, choices=["local", "hpc"], default="local")
-    parser.add_argument("--csv_file", type=str, default="Final_AP_url_label_50000.csv")
+    parser.add_argument("--csv_file", type=str, default="local/Final_AP_url_label_50000.csv")
     parser.add_argument("--prompt", type=str, default="FINAL REPORT\n\n")
     parser.add_argument("--num_datapoints", type=int, default=None)
     parser.add_argument("--img_size", type=int, default=224)
