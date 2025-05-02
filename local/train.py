@@ -4,6 +4,8 @@ import torch.nn as nn
 from transformers import AutoTokenizer
 from torch.optim import Adam
 from tqdm import tqdm
+import pandas as pd
+from pathlib import Path
 
 from data import get_dataloader
 from radtex_model import RadTexModel
@@ -21,8 +23,13 @@ def train(model, train_loader, val_loader, tokenizer, epochs=1, lr=2e-5, save_pa
     classification_criterion = nn.CrossEntropyLoss()
     generation_criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
     optimizer = Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=lr, weight_decay=1e-5)
+    
+    epoch_results = []
+    phase = "classification" if only_classification else "text_generation"
 
     for epoch in range(epochs):
+        
+
         print(f"\n🔥 Epoch {epoch+1}/{epochs}")
         model.train()
         total_class_loss, total_text_loss = 0.0, 0.0
@@ -62,6 +69,19 @@ def train(model, train_loader, val_loader, tokenizer, epochs=1, lr=2e-5, save_pa
         print(f"🧪 Epoch [{epoch+1}/{epochs}] | Class Loss: {total_class_loss / len(train_loader):.4f}, Text Loss: {total_text_loss / len(train_loader):.4f}")
 
         validate(model, val_loader, tokenizer, vocab_size, classification_criterion, generation_criterion, device, only_classification, only_text_generation)
+        epoch_results.append({
+        "epoch": epoch + 1,
+        "class_loss": total_class_loss / len(train_loader),
+        "text_loss": total_text_loss / len(train_loader)
+        })
+    if save_path:
+        save_dir = Path(save_path).parent
+        (save_dir / "evaluations").mkdir(parents=True, exist_ok=True)
+    if phase == "classification":
+        filename = "classification_epoch_metrics.csv"
+    else:
+        filename = "text_gen_epoch_metrics.csv"
+    pd.DataFrame(epoch_results).to_csv(save_dir / "evaluations" / filename, index=False)
 
     torch.save(model.state_dict(), save_path)
     print(f"✅ Model saved at {save_path}")

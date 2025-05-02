@@ -1,0 +1,8 @@
+For visualize.py
+I don't like the existing 8 grid image, because we can't see anything in those. So please remove that structure
+What i would like to replace it with is for a single image to outputted in a 2 x 2 matrix.
+[actual image] [labels, metrics, explanation of italic, underline]
+[generated text] [ true text]
+I also know matplotlib isn't good for color, so please make true words bold and mismatch italic and underlined.
+I would like the get the 10 best images and 10 worst images, named of course.
+And i would like to include line plots. and confusion matrix. Please print out the full visualize.py

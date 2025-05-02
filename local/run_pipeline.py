@@ -9,12 +9,13 @@ import torch
 import platform
 from pathlib import Path
 from datetime import datetime
+import nltk
 
 from radtex_model import build_model
 from data import get_dataloader
 from train import train, get_tokenizer
 from evaluate import evaluate
-from visualize import visualize_predictions
+from visualize import visualize_results
 
 # ────────────────── CLI ──────────────────
 parser = argparse.ArgumentParser(description="Chest-X-ray end-to-end pipeline (train → eval → visualise)")
@@ -59,14 +60,19 @@ if args_cli.config is not None:
 else:
     args = args_cli
 
-    # ✅ Add this line here
+# ────────────────── NLTK data path ──────────────────
+if args.setup == "local":
+    nltk.data.path.append("D:/Bachelor_project/local")
+else:
+    nltk.data.path.append("/work3/s224228/nltk_data")
+
 start_time = time.time()
 
 # ────────────────── Resolve Save Path ──────────────────
 root_path = "D:/" if args.setup == "local" else "/work3/s224228/"
 save_root = Path(root_path) / args.save_path
-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-run_name = args.name or f"{args.encoder}_{args.decoder}_{timestamp}"
+run_date = datetime.now().strftime("%d-%m-%Y_%H.%M")
+run_name = f"{args.name}_{run_date}"
 run_dir = (save_root / run_name).resolve()
 run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -166,7 +172,7 @@ elif args.training_phases == "text_only":
 else:
     raise ValueError(f"Unknown training_phases: {args.training_phases}")
 
-# ────────────────── Evaluation & Visualisation ──────────────────
+# ────────────────── Evaluation ──────────────────
 evaluate(
     model_path=str(final_ckpt),
     batch_size=args.batch_size,
@@ -176,19 +182,13 @@ evaluate(
     setup=args.setup,
     csv_file=str(args.csv_file),
     num_datapoints=args.num_datapoints,
-    img_size=(args.img_size, args.img_size)
+    img_size=(args.img_size, args.img_size),
+    output_dir=run_dir
 )
 
-visualize_predictions(
-    model_path=str(final_ckpt),
-    batch_size=args.batch_size,
-    encoder=args.encoder,
-    decoder=args.decoder,
-    setup=args.setup,
-    csv_file=str(args.csv_file),
-    num_datapoints=args.num_datapoints,
-    img_size=(args.img_size, args.img_size)
-)
+# ────────────────── Visualisation (new version) ──────────────────
+results_csv = run_dir / "evaluations" / "per_image_results.csv"
+visualize_results(str(results_csv), str(run_dir))
 
 # ────────────────── Runtime Summary ──────────────────
 total_time = time.time() - start_time
