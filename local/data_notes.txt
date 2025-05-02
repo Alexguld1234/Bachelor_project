@@ -1,0 +1,8 @@
+Fundet all AP billeder fra metadata taget 50000
+Kun 1 fra hver study
+For hver study_id fundet pneumonia fra negbio
+Downloaded filer og deres placer
+We har lavet en csv med deres respektive placering på local versus hpc. 
+
+
+We har sørget for at wget har fungeret for alle de ønskede 50000, fra både mimic-cxr og mimic-cxr-jpg
