@@ -1,9 +1,10 @@
-# model.py
+# radtex_model.py
 import torch
 import torch.nn as nn
 import torchvision.models as models
 from transformers import AutoModelForCausalLM, GPT2LMHeadModel, GPT2Config
 import torchxrayvision as xrv
+import torchvision.models as tv_models
 
 # ---------------- Encoder Options ----------------
 
@@ -22,17 +23,46 @@ class ResNet50Backbone(nn.Module):
         x = self.flatten(x)
         return torch.flatten(x, 1)
 
-class DenseNet121Backbone(nn.Module):
-    def __init__(self, pretrained=True):
+class DenseNetBackbone(nn.Module):
+    def __init__(self, variant="densenet121", pretrained=True):
         super().__init__()
-        self.model = xrv.models.DenseNet(weights="all" if pretrained else None)
-        self.model.op_threshs = None  # Turn off built-in thresholds
+        if variant == "densenet121":
+            net = tv_models.densenet121(weights=tv_models.DenseNet121_Weights.DEFAULT if pretrained else None)
+            self.feature_dim = 1024
+        elif variant == "densenet169":
+            net = tv_models.densenet169(weights=tv_models.DenseNet169_Weights.DEFAULT if pretrained else None)
+            self.feature_dim = 1664
+        elif variant == "densenet201":
+            net = tv_models.densenet201(weights=tv_models.DenseNet201_Weights.DEFAULT if pretrained else None)
+            self.feature_dim = 1920
+        elif variant == "densenet264":
+            raise NotImplementedError("DenseNet-264 is not available in torchvision.")
+        else:
+            raise ValueError(f"Unknown DenseNet variant: {variant}")
+
+        # Adapt first conv layer to 1 channel
+        conv0 = net.features.conv0
+        self.conv0 = nn.Conv2d(1, conv0.out_channels, kernel_size=conv0.kernel_size,
+                               stride=conv0.stride, padding=conv0.padding, bias=False)
+        with torch.no_grad():
+            self.conv0.weight = nn.Parameter(conv0.weight.mean(dim=1, keepdim=True))
+
+        self.features = net.features
+        self.pooling = nn.AdaptiveAvgPool2d((1, 1))
 
     def forward(self, x):
-        features = self.model.features(x)
-        features = torch.nn.functional.relu(features, inplace=True)
-        features = torch.nn.functional.adaptive_avg_pool2d(features, (1, 1))
-        return features.view(features.size(0), -1)
+        x = self.conv0(x)
+        x = self.features.relu0(self.features.norm0(x))
+        x = self.features.denseblock1(x)
+        x = self.features.transition1(x)
+        x = self.features.denseblock2(x)
+        x = self.features.transition2(x)
+        x = self.features.denseblock3(x)
+        x = self.features.transition3(x)
+        x = self.features.denseblock4(x)
+        x = self.features.norm5(x)
+        x = self.pooling(x)
+        return x.view(x.size(0), -1)
 
 class ScratchCNN(nn.Module):
     def __init__(self):
@@ -62,31 +92,21 @@ class ScratchTransformer(nn.Module):
     def forward(self, input_ids, encoder_hidden_states=None):
         x = self.embedding(input_ids)
         if encoder_hidden_states is not None:
-            if encoder_hidden_states.dim() == 2:  # [B, D]
-                encoder_hidden_states = encoder_hidden_states.unsqueeze(1)  # [B, 1, D]
-            x = x + encoder_hidden_states  # broadcast to [B, T, D]
-  # add features as bias
+            if encoder_hidden_states.dim() == 2:
+                encoder_hidden_states = encoder_hidden_states.unsqueeze(1)
+            x = x + encoder_hidden_states
         x = self.transformer(x)
         logits = self.fc_out(x)
         return logits
-    def generate(self, input_ids, encoder_hidden_states=None, max_length=128, **kwargs):
-        """
-        Greedy decoding for the scratch transformer.
-        input_ids: [batch_size, seq_len] (prompt tokens)
-        encoder_hidden_states: [batch_size, hidden_dim]
-        """
-        generated = input_ids.clone()
-        batch_size = input_ids.size(0)
-        device = input_ids.device
 
+    def generate(self, input_ids, encoder_hidden_states=None, max_length=128, **kwargs):
+        generated = input_ids.clone()
         for _ in range(max_length - input_ids.size(1)):
             logits = self.forward(generated, encoder_hidden_states=encoder_hidden_states)
-            next_token_logits = logits[:, -1, :]  # get logits for last token
-            next_token = next_token_logits.argmax(dim=-1, keepdim=True)  # greedy pick
+            next_token_logits = logits[:, -1, :]
+            next_token = next_token_logits.argmax(dim=-1, keepdim=True)
             generated = torch.cat((generated, next_token), dim=1)
-
         return generated
-
 
 # ---------------- Full Model ----------------
 
@@ -94,20 +114,18 @@ class RadTexModel(nn.Module):
     def __init__(self, encoder_name, decoder_name, vocab_size, num_classes=4, pretrained_backbone=True):
         super().__init__()
 
-        # Select Encoder
         if encoder_name == "resnet":
             self.visual_backbone = ResNet50Backbone(pretrained=pretrained_backbone)
             visual_feature_dim = 2048
-        elif encoder_name == "densenet":
-            self.visual_backbone = DenseNet121Backbone(pretrained=pretrained_backbone)
-            visual_feature_dim = 1024
+        elif encoder_name.startswith("densenet"):
+            self.visual_backbone = DenseNetBackbone(variant=encoder_name, pretrained=pretrained_backbone)
+            visual_feature_dim = self.visual_backbone.feature_dim
         elif encoder_name == "scratch_encoder":
             self.visual_backbone = ScratchCNN()
             visual_feature_dim = 64
         else:
             raise ValueError(f"Unknown encoder: {encoder_name}")
 
-        # Select Decoder
         if decoder_name == "gpt2":
             config = GPT2Config.from_pretrained("gpt2")
             config.add_cross_attention = True
@@ -118,19 +136,14 @@ class RadTexModel(nn.Module):
             self.text_decoder.resize_token_embeddings(vocab_size)
         elif decoder_name == "biogpt":
             self.text_decoder = AutoModelForCausalLM.from_pretrained("microsoft/biogpt")
-        # Only resize if vocab size doesn't match
             if self.text_decoder.config.vocab_size != vocab_size:
                 self.text_decoder.resize_token_embeddings(vocab_size)
-
         elif decoder_name == "scratch_decoder":
             self.text_decoder = ScratchTransformer(vocab_size)
         else:
             raise ValueError(f"Unknown decoder: {decoder_name}")
-        if decoder_name == "scratch_decoder":
-            decoder_input_dim = 256  # Match hidden_dim from ScratchTransformer
-        else:
-            decoder_input_dim = 768
 
+        decoder_input_dim = 256 if decoder_name == "scratch_decoder" else 768
         self.feature_projection = nn.Linear(visual_feature_dim, decoder_input_dim)
 
         self.classifier = nn.Sequential(
@@ -148,8 +161,7 @@ class RadTexModel(nn.Module):
         if generate and text_inputs is not None:
             encoder_hidden_states = projected_features.unsqueeze(1)
             attention_mask = torch.ones_like(text_inputs)
-
-            if hasattr(self.text_decoder, 'generate'):  # GPT/BioGPT models
+            if hasattr(self.text_decoder, 'generate'):
                 generation_args = generation_args or {}
                 base_args = {
                     "input_ids": text_inputs,
@@ -160,30 +172,17 @@ class RadTexModel(nn.Module):
                     "top_p": generation_args.get("top_p", 0.95),
                     "do_sample": True
                 }
-
-    # Only pass encoder_hidden_states if model supports cross-attention
                 if hasattr(self.text_decoder, "config") and getattr(self.text_decoder.config, "add_cross_attention", False):
                     base_args["encoder_hidden_states"] = encoder_hidden_states
-
                 generated_ids = self.text_decoder.generate(**base_args)
-            else:  # scratch decoder
-                generated_ids = None  # Scratch decoder does not implement `.generate()`
-
+            else:
+                generated_ids = None
             return classification_output, generated_ids
 
         elif text_inputs is not None:
-            seq_len = text_inputs.shape[1]
-            repeated_features = projected_features.unsqueeze(1).repeat(1, seq_len, 1)
-
-            if hasattr(self.text_decoder, 'forward'):
-                out = self.text_decoder(
-                    input_ids=text_inputs,
-                    encoder_hidden_states=repeated_features
-                )
-                logits = out.logits if hasattr(out, "logits") else out  # support HuggingFace or scratch
-            else:
-                logits = self.text_decoder(text_inputs, encoder_hidden_states=repeated_features)
-
+            repeated_features = projected_features.unsqueeze(1).repeat(1, text_inputs.shape[1], 1)
+            out = self.text_decoder(input_ids=text_inputs, encoder_hidden_states=repeated_features)
+            logits = out.logits if hasattr(out, "logits") else out
             return classification_output, logits
 
         return classification_output, None
@@ -196,7 +195,6 @@ class RadTexModel(nn.Module):
         for param in self.visual_backbone.parameters():
             param.requires_grad = True
 
-# ✅ Helper for pipeline use
 def build_model(encoder_name, decoder_name, vocab_size, pretrained_backbone=True, freeze_encoder=False):
     model = RadTexModel(
         encoder_name=encoder_name,

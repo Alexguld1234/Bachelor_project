@@ -157,7 +157,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--model_path", type=str, required=True)
-    parser.add_argument("--encoder", type=str, default="densenet")
+    parser.add_argument("--encoder", type=str, default="densenet121")
     parser.add_argument("--decoder", type=str, default="biogpt")
     parser.add_argument("--batch_size", type=int, default=8)
     parser.add_argument("--device", type=str, default="cuda")

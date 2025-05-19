@@ -33,7 +33,9 @@ parser.add_argument("--num_datapoints", type=int, default=None)
 parser.add_argument("--img_size", type=int, default=224, help="Resize images to (img_size, img_size)")
 
 # • model
-parser.add_argument("--encoder", type=str, default="resnet", choices=["resnet", "densenet", "scratch_encoder"])
+parser.add_argument("--encoder", type=str, default="densenet121",
+    choices=["resnet", "densenet121", "densenet169", "densenet201", "densenet264", "scratch_encoder"])
+
 parser.add_argument("--decoder", type=str, default="gpt2", choices=["gpt2", "biogpt", "scratch_decoder"])
 parser.add_argument("--freeze_encoder", action="store_true")
 
