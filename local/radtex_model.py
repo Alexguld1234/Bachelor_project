@@ -149,8 +149,7 @@ class RadTexModel(nn.Module):
         self.classifier = nn.Sequential(
             nn.Linear(visual_feature_dim, 512),
             nn.ReLU(),
-            nn.Linear(512, num_classes),
-            nn.Sigmoid()
+            nn.Linear(512, num_classes)
         )
 
     def forward(self, images, text_inputs=None, generate=False, generation_args=None):

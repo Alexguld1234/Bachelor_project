@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader, Dataset, random_split
 
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
-csv_file="local/Final_AP_url_label_50000.csv"
+csv_file="local/Final_AP_Missing_Removed_12519.csv"
 
 
 def set_seed(seed: int = 42) -> None:
