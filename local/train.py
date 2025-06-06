@@ -88,7 +88,7 @@ def train(model, train_loader, val_loader, tokenizer, epochs=1, lr=2e-5, save_pa
     return model
 def validate(model, val_loader, tokenizer, vocab_size, classification_criterion, generation_criterion, device, only_classification=False, only_text_generation=False):
     model.eval()
-    correct, total = 0, 0
+    correct, total, base_correct = 0, 0, 0
     total_class_loss, total_text_loss = 0.0, 0.0
 
     with torch.no_grad():
@@ -114,8 +114,13 @@ def validate(model, val_loader, tokenizer, vocab_size, classification_criterion,
                 total_text_loss += text_loss.item()
 
             predicted = class_output.argmax(dim=1)
+            print(f"Predicted: {predicted}, Labels: {labels}")
             correct += (predicted == labels).sum().item()
+            base_correct += ((torch.tensor([2] * labels.size(0)).to(device)) == labels).sum().item()
             total += labels.size(0)
 
+
+    base_acc = 100 * base_correct / total 
+    print(f"📊 Validation — Base Accuracy: {base_acc:.2f}%")
     acc = 100 * correct / total
     print(f"🔍 Validation — Class Loss: {total_class_loss / len(val_loader):.4f}, Text Loss: {total_text_loss / len(val_loader):.4f}, Accuracy: {acc:.2f}%")
